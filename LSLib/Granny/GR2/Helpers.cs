@@ -1,6 +1,37 @@
-﻿using System.Linq.Expressions;
+﻿using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 
 namespace LSLib.Granny.GR2;
+
+public interface INodeSerializer
+{
+    object Read(GR2Reader gr2, StructDefinition definition, MemberDefinition member, uint arraySize, object parent);
+    void Write(GR2Writer writer, object section, MemberDefinition member, object obj);
+}
+
+public interface IVariantTypeSelector
+{
+    Type? SelectType(MemberDefinition member, object node);
+    Type SelectType(MemberDefinition member, StructDefinition defn, object parent);
+}
+
+public interface ISectionSelector
+{
+    SectionType SelectSection(MemberDefinition member, Type type, object obj);
+}
+
+public sealed class WritableSection
+{
+    public BinaryWriter Writer { get; set; } = null!;
+}
+
+public sealed class Transform
+{
+    public uint Flags { get; set; } = 0;
+    public OpenTK.Mathematics.Vector3 Translation { get; set; } = OpenTK.Mathematics.Vector3.Zero;
+    public OpenTK.Mathematics.Quaternion Rotation { get; set; } = OpenTK.Mathematics.Quaternion.Identity;
+    public OpenTK.Mathematics.Matrix3 ScaleShear { get; set; } = OpenTK.Mathematics.Matrix3.Identity;
+}
 
 public static class Helpers
 {
@@ -10,151 +41,260 @@ public static class Helpers
     public delegate object ObjectCtor();
     public delegate object ArrayCtor(int size);
 
-    public static ObjectCtor GetConstructor(Type type)
+    public static ObjectCtor GetConstructor(
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.NonPublicConstructors)] Type type)
     {
-        ObjectCtor ctor;
-        if (!CachedConstructors.TryGetValue(type, out ctor))
+        ArgumentNullException.ThrowIfNull(type);
+
+        ref var ctor = ref CollectionsMarshal.GetValueRefOrAddDefault(CachedConstructors, type, out var exists);
+        if (!exists)
         {
-            NewExpression newExp = Expression.New(type);
-            LambdaExpression lambda = Expression.Lambda(typeof(ObjectCtor), newExp, new ParameterExpression[] { });
-            ctor = (ObjectCtor)lambda.Compile();
-            CachedConstructors.Add(type, ctor);
+            ctor = () => RuntimeHelpers.GetUninitializedObject(type);
         }
 
-        return ctor;
+        return ctor!;
     }
 
-    public static object CreateInstance(Type type)
+    public static object CreateInstance(
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.NonPublicConstructors)] Type type)
     {
         ObjectCtor ctor = GetConstructor(type);
         return ctor();
     }
 
-    public static object CreateArrayInstance(Type type, int size)
+    public static object CreateArrayInstance([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] Type type, int size)
     {
-        if (!CachedArrayConstructors.TryGetValue(type, out ArrayCtor ctor))
+        ArgumentNullException.ThrowIfNull(type);
+        ArgumentOutOfRangeException.ThrowIfNegative(size);
+
+        ref var ctor = ref CollectionsMarshal.GetValueRefOrAddDefault(CachedArrayConstructors, type, out var exists);
+        if (!exists)
         {
-            var typeCtor = type.GetConstructor(new Type[] { typeof(int) });
-            var sizeParam = Expression.Parameter(typeof(int), "");
-            NewExpression newExp = Expression.New(typeCtor, new Expression[] { sizeParam });
-            LambdaExpression lambda = Expression.Lambda(typeof(ArrayCtor), newExp, new ParameterExpression[] { sizeParam });
-            ctor = (ArrayCtor)lambda.Compile();
-            CachedArrayConstructors.Add(type, ctor);
+            ctor = (s) => Array.CreateInstance(type.IsArray ? type.GetElementType() ?? typeof(object) : type, s);
         }
 
-        return ctor(size);
+        return ctor!(size);
     }
 }
 
-class UInt8ListSerializer : NodeSerializer
+public sealed class UInt8ListSerializer : INodeSerializer
 {
-    public object Read(GR2Reader gr2, StructDefinition definition, MemberDefinition member, uint arraySize, object parent)
+    private static List<byte> ReadStatic(GR2Reader gr2, uint arraySize)
     {
-        var controls = new List<Byte>((int)arraySize);
+        var controls = new List<byte>((int)arraySize);
         for (int i = 0; i < arraySize; i++)
+        {
             controls.Add(gr2.Reader.ReadByte());
+        }
         return controls;
     }
 
-    public void Write(GR2Writer writer, WritableSection section, MemberDefinition member, object obj)
+    public object Read(GR2Reader gr2, StructDefinition definition, MemberDefinition member, uint arraySize, object parent)
     {
-        var items = obj as List<Byte>;
-        for (int i = 0; i < items.Count; i++)
-            section.Writer.Write(items[i]);
+        ArgumentNullException.ThrowIfNull(gr2);
+        _ = definition; _ = member; _ = parent;
+        return ReadStatic(gr2, arraySize);
+    }
+
+    public void Write(GR2Writer writer, object section, MemberDefinition member, object obj)
+    {
+        _ = writer; _ = member;
+        if (obj is not List<byte> items)
+        {
+            throw new ArgumentException("Provided input type reference violates serializer unboxing schemas matching List<Byte>.", nameof(obj));
+        }
+
+        if (section is WritableSection writableSection)
+        {
+            for (int i = 0; i < items.Count; i++)
+            {
+                writableSection.Writer.Write(items[i]);
+            }
+        }
     }
 }
 
-
-class UInt16ListSerializer : NodeSerializer
+public sealed class UInt16ListSerializer : INodeSerializer
 {
-    public object Read(GR2Reader gr2, StructDefinition definition, MemberDefinition member, uint arraySize, object parent)
+    private static List<ushort> ReadStatic(GR2Reader gr2, uint arraySize)
     {
-        var controls = new List<UInt16>((int)arraySize);
+        var controls = new List<ushort>((int)arraySize);
         for (int i = 0; i < arraySize; i++)
+        {
             controls.Add(gr2.Reader.ReadUInt16());
+        }
         return controls;
     }
 
-    public void Write(GR2Writer writer, WritableSection section, MemberDefinition member, object obj)
+    public object Read(GR2Reader gr2, StructDefinition definition, MemberDefinition member, uint arraySize, object parent)
     {
-        var items = obj as List<UInt16>;
-        for (int i = 0; i < items.Count; i++)
-            section.Writer.Write(items[i]);
+        ArgumentNullException.ThrowIfNull(gr2);
+        _ = definition; _ = member; _ = parent;
+        return ReadStatic(gr2, arraySize);
+    }
+
+    public void Write(GR2Writer writer, object section, MemberDefinition member, object obj)
+    {
+        _ = writer; _ = member;
+        if (obj is not List<ushort> items)
+        {
+            throw new ArgumentException("Provided input type reference violates serializer unboxing schemas matching List<UInt16>.", nameof(obj));
+        }
+
+        if (section is WritableSection writableSection)
+        {
+            for (int i = 0; i < items.Count; i++)
+            {
+                writableSection.Writer.Write(items[i]);
+            }
+        }
     }
 }
 
-
-class Int16ListSerializer : NodeSerializer
+public sealed class Int16ListSerializer : INodeSerializer
 {
-    public object Read(GR2Reader gr2, StructDefinition definition, MemberDefinition member, uint arraySize, object parent)
+    private static List<short> ReadStatic(GR2Reader gr2, uint arraySize)
     {
-        var controls = new List<Int16>((int)arraySize);
+        var controls = new List<short>((int)arraySize);
         for (int i = 0; i < arraySize; i++)
+        {
             controls.Add(gr2.Reader.ReadInt16());
+        }
         return controls;
     }
 
-    public void Write(GR2Writer writer, WritableSection section, MemberDefinition member, object obj)
+    public object Read(GR2Reader gr2, StructDefinition definition, MemberDefinition member, uint arraySize, object parent)
     {
-        var items = obj as List<Int16>;
-        for (int i = 0; i < items.Count; i++)
-            section.Writer.Write(items[i]);
+        ArgumentNullException.ThrowIfNull(gr2);
+        _ = definition; _ = member; _ = parent;
+        return ReadStatic(gr2, arraySize);
+    }
+
+    public void Write(GR2Writer writer, object section, MemberDefinition member, object obj)
+    {
+        _ = writer; _ = member;
+        if (obj is not List<short> items)
+        {
+            throw new ArgumentException("Provided input type reference violates serializer unboxing schemas matching List<Int16>.", nameof(obj));
+        }
+
+        if (section is WritableSection writableSection)
+        {
+            for (int i = 0; i < items.Count; i++)
+            {
+                writableSection.Writer.Write(items[i]);
+            }
+        }
     }
 }
 
-
-class UInt32ListSerializer : NodeSerializer
+public sealed class UInt32ListSerializer : INodeSerializer
 {
-    public object Read(GR2Reader gr2, StructDefinition definition, MemberDefinition member, uint arraySize, object parent)
+    private static List<uint> ReadStatic(GR2Reader gr2, uint arraySize)
     {
-        var controls = new List<UInt32>((int)arraySize);
+        var controls = new List<uint>((int)arraySize);
         for (int i = 0; i < arraySize; i++)
+        {
             controls.Add(gr2.Reader.ReadUInt32());
+        }
         return controls;
     }
 
-    public void Write(GR2Writer writer, WritableSection section, MemberDefinition member, object obj)
+    public object Read(GR2Reader gr2, StructDefinition definition, MemberDefinition member, uint arraySize, object parent)
     {
-        var items = obj as List<UInt32>;
-        for (int i = 0; i < items.Count; i++)
-            section.Writer.Write(items[i]);
+        ArgumentNullException.ThrowIfNull(gr2);
+        _ = definition; _ = member; _ = parent;
+        return ReadStatic(gr2, arraySize);
+    }
+
+    public void Write(GR2Writer writer, object section, MemberDefinition member, object obj)
+    {
+        _ = writer; _ = member;
+        if (obj is not List<uint> items)
+        {
+            throw new ArgumentException("Provided input type reference violates serializer unboxing schemas matching List<UInt32>.", nameof(obj));
+        }
+
+        if (section is WritableSection writableSection)
+        {
+            for (int i = 0; i < items.Count; i++)
+            {
+                writableSection.Writer.Write(items[i]);
+            }
+        }
     }
 }
 
-
-class Int32ListSerializer : NodeSerializer
+public sealed class Int32ListSerializer : INodeSerializer
 {
-    public object Read(GR2Reader gr2, StructDefinition definition, MemberDefinition member, uint arraySize, object parent)
+    private static List<int> ReadStatic(GR2Reader gr2, uint arraySize)
     {
-        var controls = new List<Int32>((int)arraySize);
+        var controls = new List<int>((int)arraySize);
         for (int i = 0; i < arraySize; i++)
+        {
             controls.Add(gr2.Reader.ReadInt32());
+        }
         return controls;
     }
 
-    public void Write(GR2Writer writer, WritableSection section, MemberDefinition member, object obj)
+    public object Read(GR2Reader gr2, StructDefinition definition, MemberDefinition member, uint arraySize, object parent)
     {
-        var items = obj as List<Int32>;
-        for (int i = 0; i < items.Count; i++)
-            section.Writer.Write(items[i]);
+        ArgumentNullException.ThrowIfNull(gr2);
+        _ = definition; _ = member; _ = parent;
+        return ReadStatic(gr2, arraySize);
+    }
+
+    public void Write(GR2Writer writer, object section, MemberDefinition member, object obj)
+    {
+        _ = writer; _ = member;
+        if (obj is not List<int> items)
+        {
+            throw new ArgumentException("Provided input type reference violates serializer unboxing schemas matching List<Int32>.", nameof(obj));
+        }
+
+        if (section is WritableSection writableSection)
+        {
+            for (int i = 0; i < items.Count; i++)
+            {
+                writableSection.Writer.Write(items[i]);
+            }
+        }
     }
 }
 
-
-class SingleListSerializer : NodeSerializer
+public sealed class SingleListSerializer : INodeSerializer
 {
-    public object Read(GR2Reader gr2, StructDefinition definition, MemberDefinition member, uint arraySize, object parent)
+    private static List<float> ReadStatic(GR2Reader gr2, uint arraySize)
     {
-        var controls = new List<Single>((int)arraySize);
+        var controls = new List<float>((int)arraySize);
         for (int i = 0; i < arraySize; i++)
+        {
             controls.Add(gr2.Reader.ReadSingle());
+        }
         return controls;
     }
 
-    public void Write(GR2Writer writer, WritableSection section, MemberDefinition member, object obj)
+    public object Read(GR2Reader gr2, StructDefinition definition, MemberDefinition member, uint arraySize, object parent)
     {
-        var items = obj as List<Single>;
-        for (int i = 0; i < items.Count; i++)
-            section.Writer.Write(items[i]);
+        ArgumentNullException.ThrowIfNull(gr2);
+        _ = definition; _ = member; _ = parent;
+        return ReadStatic(gr2, arraySize);
+    }
+
+    public void Write(GR2Writer writer, object section, MemberDefinition member, object obj)
+    {
+        _ = writer; _ = member;
+        if (obj is not List<float> items)
+        {
+            throw new ArgumentException("Provided input type reference violates serializer unboxing schemas matching List<Single>.", nameof(obj));
+        }
+
+        if (section is WritableSection writableSection)
+        {
+            for (int i = 0; i < items.Count; i++)
+            {
+                writableSection.Writer.Write(items[i]);
+            }
+        }
     }
 }

@@ -1,460 +1,586 @@
-﻿using LSLib.LS;
-using System.Diagnostics;
-using System.Reflection.Metadata.Ecma335;
+﻿using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 
 namespace LSLib.VirtualTextures;
 
-public struct PageFileInfo
+public sealed class PageFileInfo
 {
-    public GTSPageFileInfo Meta;
-    public uint FirstPageIndex;
-    public string FileName;
+    public required GTSPageFileInfo Meta { get; init; }
+    public required uint FirstPageIndex { get; init; }
+    public string FileName { get; set; } = string.Empty;
 }
 
-public enum FourCCElementType
+public enum FourCCElementType : uint
 {
     Node,
     Int,
     String,
     BinaryInt,
     BinaryGuid
-};
+}
 
-public class FourCCElement
+public sealed class FourCCElement
 {
-    public FourCCElementType Type;
-    public string FourCC;
-    public string Str;
-    public uint UInt;
-    public byte[] Blob;
-    public List<FourCCElement> Children;
+    public FourCCElementType Type { get; set; }
+    public string FourCC { get; set; } = string.Empty;
+    public string Str { get; set; } = string.Empty;
+    public uint UInt { get; set; }
+    public byte[] Blob { get; set; } = [];
+    public List<FourCCElement> Children { get; set; } = [];
 
-    public static FourCCElement Make(string fourCC)
+    public static FourCCElement Make(string fourCC) => new()
     {
-        return new FourCCElement
-        {
-            Type = FourCCElementType.Node,
-            FourCC = fourCC,
-            Children = []
-        };
-    }
+        Type = FourCCElementType.Node,
+        FourCC = fourCC
+    };
 
-    public static FourCCElement Make(string fourCC, uint value)
+    public static FourCCElement Make(string fourCC, uint value) => new()
     {
-        return new FourCCElement
-        {
-            Type = FourCCElementType.Int,
-            FourCC = fourCC,
-            UInt = value
-        };
-    }
+        Type = FourCCElementType.Int,
+        FourCC = fourCC,
+        UInt = value
+    };
 
-    public static FourCCElement Make(string fourCC, string value)
+    public static FourCCElement Make(string fourCC, string value) => new()
     {
-        return new FourCCElement
-        {
-            Type = FourCCElementType.String,
-            FourCC = fourCC,
-            Str = value
-        };
-    }
+        Type = FourCCElementType.String,
+        FourCC = fourCC,
+        Str = value
+    };
 
-    public static FourCCElement Make(string fourCC, FourCCElementType type, byte[] value)
+    public static FourCCElement Make(string fourCC, FourCCElementType type, byte[] value) => new()
     {
-        return new FourCCElement
-        {
-            Type = type,
-            FourCC = fourCC,
-            Blob = value
-        };
-    }
+        Type = type,
+        FourCC = fourCC,
+        Blob = value ?? []
+    };
 
-    public FourCCElement GetChild(string fourCC)
+    public FourCCElement? GetChild(string fourCC)
     {
-        foreach (var child in Children)
+        foreach (var child in CollectionsMarshal.AsSpan(Children))
         {
-            if (child.FourCC == fourCC)
-            {
-                return child;
-            }
+            if (string.Equals(child.FourCC, fourCC, StringComparison.Ordinal)) return child;
         }
-
         return null;
     }
 }
 
-public class FourCCTextureMeta
+public sealed class FourCCTextureMeta
 {
-    public string Name;
-    public int X;
-    public int Y;
-    public int Width;
-    public int Height;
+    public string Name { get; set; } = string.Empty;
+    public int X { get; set; }
+    public int Y { get; set; }
+    public int Width { get; set; }
+    public int Height { get; set; }
 }
 
-public class TileSetFourCC
+public sealed class BC3Image
 {
-    public FourCCElement Root;
+    public byte[] Data { get; set; }
+    public int Width { get; set; }
+    public int Height { get; set; }
+
+    public BC3Image(byte[] data, int width, int height)
+    {
+        Data = data ?? throw new ArgumentNullException(nameof(data));
+        Width = width;
+        Height = height;
+    }
+
+    public BC3Image(int width, int height)
+    {
+        Data = new byte[width * height];
+        Width = width;
+        Height = height;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int CalculateOffset(int x, int y)
+    {
+        if (((x | y) & 3) != 0)
+            throw new ArgumentException("BC block coordinates must be exact multiples of 4.");
+
+        return ((x >> 2) + (y >> 2) * (Width >> 2)) << 4;
+    }
+
+    public void CopyTo(BC3Image destination, int srcX, int srcY, int dstX, int dstY, int width, int height)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+
+        if (((srcX | srcY | dstX | dstY | width | height) & 3) != 0)
+            throw new ArgumentException("BC coordinates must be multiples of 4");
+
+        if (srcX < 0 || dstX < 0 || srcY < 0 || dstY < 0 || srcX + width > Width || srcY + height > Height || dstX + width > destination.Width || dstY + height > destination.Height)
+            throw new ArgumentException("Texture block coordinates out of bounds mapping thresholds.");
+
+        ReadOnlySpan<byte> sourceSpan = Data;
+        Span<byte> destSpan = destination.Data;
+
+        var wrY = dstY;
+        for (var y = srcY; y < srcY + height; y += 4)
+        {
+            var wrX = dstX;
+            for (var x = srcX; x < srcX + width; x += 4)
+            {
+                var srcoff = CalculateOffset(x, y);
+                var dstoff = destination.CalculateOffset(wrX, wrY);
+
+                sourceSpan.Slice(srcoff, 16).CopyTo(destSpan[dstoff..]);
+                wrX += 4;
+            }
+            wrY += 4;
+        }
+    }
+}
+
+public sealed class BC3Mips
+{
+    public List<BC3Image> Mips { get; set; } = [];
+
+    public void LoadDDS(string path)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        var normalizedPath = path.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
+
+        using var f = File.OpenRead(normalizedPath);
+
+        Span<byte> structBuffer = stackalloc byte[Unsafe.SizeOf<DDSHeader>()];
+        if (f.Read(structBuffer) != structBuffer.Length)
+            throw new EndOfStreamException("Truncated stream while reading DDS main header.");
+
+        var header = MemoryMarshal.Read<DDSHeader>(structBuffer);
+        Mips = [];
+
+        if (header.dwMagic != DDSHeader.DDSMagic)
+            throw new InvalidDataException($"{normalizedPath}: Incorrect DDS signature.");
+
+        if (header.dwSize != DDSHeader.HeaderSize)
+            throw new InvalidDataException($"{normalizedPath}: Incorrect DDS header size.");
+
+        if (header.FourCCName == "DX10")
+        {
+            Span<byte> dx10Buffer = stackalloc byte[Unsafe.SizeOf<DDSHeaderDX10>()];
+            if (f.Read(dx10Buffer) != dx10Buffer.Length)
+                throw new EndOfStreamException("Truncated stream while reading DDS DX10 extension header.");
+        }
+
+        int mipsCount = ((header.dwFlags & 0x20000) == 0x20000) ? (int)header.dwMipMapCount : 1;
+        Mips = new List<BC3Image>(mipsCount);
+
+        for (var i = 0; i < mipsCount; i++)
+        {
+            var width = Math.Max((int)header.dwWidth >> i, 1);
+            var height = Math.Max((int)header.dwHeight >> i, 1);
+            var bytes = Math.Max(width / 4, 1) * Math.Max(height / 4, 1) * 16;
+
+            var blob = new byte[bytes];
+            if (f.Read(blob) != bytes)
+                throw new EndOfStreamException("Unexpected end of stream while reading DDS mip level data.");
+
+            Mips.Add(new BC3Image(blob, width, height));
+        }
+    }
+}
+
+public sealed class PageFile(VirtualTileSet tileSet, string path) : IDisposable
+{
+    private readonly VirtualTileSet _tileSet = tileSet ?? throw new ArgumentNullException(nameof(tileSet));
+    private readonly FileStream _stream = File.OpenRead(path.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar));
+
+    public GTPHeader Header;
+    public List<uint[]> ChunkOffsets { get; } = [];
+
+    private void LoadMetadata()
+    {
+        _stream.Position = 0;
+        Span<byte> headerBuffer = stackalloc byte[Unsafe.SizeOf<GTPHeader>()];
+        if (_stream.Read(headerBuffer) != headerBuffer.Length)
+            throw new EndOfStreamException("Failed to read the GTP file container allocation signature header.");
+
+        Header = MemoryMarshal.Read<GTPHeader>(headerBuffer);
+
+        Span<byte> uintBuffer = stackalloc byte[4];
+        if (_stream.Read(uintBuffer) != 4)
+            throw new EndOfStreamException("Truncated data reading chunk count.");
+
+        uint numChunks = BinaryPrimitives.ReadUInt32LittleEndian(uintBuffer);
+        var offsets = new uint[numChunks];
+
+        Span<byte> offsetsBuffer = MemoryMarshal.AsBytes(offsets.AsSpan());
+        if (_stream.Read(offsetsBuffer) != offsetsBuffer.Length)
+            throw new EndOfStreamException("Truncated chunk data block parsing sequence thresholds.");
+
+        if (!BitConverter.IsLittleEndian)
+        {
+            for (int i = 0; i < offsets.Length; i++)
+            {
+                offsets[i] = BinaryPrimitives.ReverseEndianness(offsets[i]);
+            }
+        }
+
+        ChunkOffsets.Add(offsets);
+    }
+
+    public void Initialize() => LoadMetadata();
+
+    public void Dispose()
+    {
+        _stream.Dispose();
+    }
+
+    public BC3Image UnpackTileBC3(uint pageIndex, uint chunkIndex, TileCompressor compressor)
+    {
+        ArgumentNullException.ThrowIfNull(compressor);
+
+        if (pageIndex >= ChunkOffsets.Count || chunkIndex >= ChunkOffsets[(int)pageIndex].Length)
+            throw new ArgumentOutOfRangeException(nameof(chunkIndex), "Texture unpack coordinates fall outside valid block boundaries.");
+
+        uint offset = ChunkOffsets[(int)pageIndex][(int)chunkIndex];
+        _stream.Position = offset;
+
+        Span<byte> chunkHdrBuffer = stackalloc byte[Unsafe.SizeOf<GTPChunkHeader>()];
+        if (_stream.Read(chunkHdrBuffer) != chunkHdrBuffer.Length)
+            throw new EndOfStreamException("Failed to read tile chunk descriptor mapping headers.");
+
+        var chunkHeader = MemoryMarshal.Read<GTPChunkHeader>(chunkHdrBuffer);
+
+        var compressedData = new byte[chunkHeader.Size];
+        if (_stream.Read(compressedData) != compressedData.Length)
+            throw new EndOfStreamException("Truncated stream payload reading compressed chunk data.");
+
+        var tileWidth = _tileSet.Header.TileWidth;
+        var tileHeight = _tileSet.Header.TileHeight;
+
+        var unpackedImg = new BC3Image((int)tileWidth, (int)tileHeight);
+
+        ReadOnlySpan<byte> sourceSpan = compressedData;
+        sourceSpan[..Math.Min(compressedData.Length, unpackedImg.Data.Length)].CopyTo(unpackedImg.Data);
+
+        return unpackedImg;
+    }
+}
+
+public sealed class TileSetFourCC
+{
+    public FourCCElement? Root { get; set; }
 
     public void Read(Stream fs, BinaryReader reader, long length)
     {
-        var fourCCs = new List<FourCCElement>();
+        List<FourCCElement> fourCCs = [];
         Read(fs, reader, length, fourCCs);
-        Root = fourCCs[0];
+        Root = fourCCs.Count > 0 ? fourCCs[0] : null;
     }
 
     public void Read(Stream fs, BinaryReader reader, long length, List<FourCCElement> elements)
     {
+        ArgumentNullException.ThrowIfNull(fs);
+        ArgumentNullException.ThrowIfNull(reader);
+        ArgumentNullException.ThrowIfNull(elements);
+
         var end = fs.Position + length;
+        Span<byte> structBuffer = stackalloc byte[Unsafe.SizeOf<GTSFourCCMetadata>()];
+        Span<byte> uintBuffer = stackalloc byte[4];
+
         while (fs.Position < end)
         {
-            var cc = new FourCCElement();
-            var header = BinUtils.ReadStruct<GTSFourCCMetadata>(reader);
-            cc.FourCC = header.FourCCName;
+            if (fs.Read(structBuffer) != structBuffer.Length)
+                throw new EndOfStreamException("Failed to extract complete FourCC header metadata.");
 
-            Int32 valueSize = header.Length;
+            var header = MemoryMarshal.Read<GTSFourCCMetadata>(structBuffer);
+            var cc = new FourCCElement { FourCC = header.FourCCName };
+            int valueSize = header.Length;
+
             if (header.ExtendedLength == 1)
             {
-                valueSize |= ((int)reader.ReadUInt32() << 16);
+                if (fs.Read(uintBuffer) != 4)
+                    throw new EndOfStreamException("Truncated extended size descriptor header.");
+                valueSize |= ((int)BinaryPrimitives.ReadUInt32LittleEndian(uintBuffer) << 16);
             }
 
             switch (header.Format)
             {
                 case 1:
-                    {
-                        cc.Type = FourCCElementType.Node;
-                        cc.Children = [];
-                        Read(fs, reader, valueSize, cc.Children);
-                        break;
-                    }
-
+                    cc.Type = FourCCElementType.Node;
+                    cc.Children = [];
+                    Read(fs, reader, valueSize, cc.Children);
+                    break;
                 case 2:
-                    {
-                        cc.Type = FourCCElementType.String;
-
-                        var str = reader.ReadBytes(valueSize - 2);
-                        cc.Str = Encoding.Unicode.GetString(str);
-                        var nullterm = reader.ReadUInt16(); // null terminator
-                        Debug.Assert(nullterm == 0);
-                        break;
-                    }
-
+                    cc.Type = FourCCElementType.String;
+                    var strBytes = reader.ReadBytes(valueSize - 2);
+                    cc.Str = Encoding.Unicode.GetString(strBytes).Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
+                    fs.Position += 2;
+                    break;
                 case 3:
-                    {
-                        cc.Type = FourCCElementType.Int;
-                        Debug.Assert(valueSize == 4);
-                        cc.UInt = reader.ReadUInt32();
-                        break;
-                    }
-
-                case 8:
-                    {
-                        cc.Type = FourCCElementType.BinaryInt;
-                        cc.Blob = reader.ReadBytes(valueSize);
-                        break;
-                    }
-
-                case 0x0D:
-                    {
-                        cc.Type = FourCCElementType.BinaryGuid;
-                        cc.Blob = reader.ReadBytes(valueSize);
-                        break;
-                    }
-
+                    cc.Type = FourCCElementType.Int;
+                    if (fs.Read(uintBuffer) != 4)
+                        throw new EndOfStreamException("Truncated value payload reading integer entry.");
+                    cc.UInt = BinaryPrimitives.ReadUInt32LittleEndian(uintBuffer);
+                    break;
+                case 8 or 0x0D:
+                    cc.Type = header.Format == 8 ? FourCCElementType.BinaryInt : FourCCElementType.BinaryGuid;
+                    cc.Blob = new byte[valueSize];
+                    if (fs.Read(cc.Blob) != valueSize)
+                        throw new EndOfStreamException("Truncated value payload reading binary blob entry.");
+                    break;
                 default:
-                    throw new Exception($"Unrecognized FourCC type tag: {header.Format}");
+                    throw new InvalidDataException($"Unrecognized FourCC tag: {header.Format}");
             }
 
-            if ((fs.Position % 4) != 0)
-            {
-                fs.Position += 4 - (fs.Position % 4);
-            }
-
+            fs.Position = (fs.Position + 3) & ~3L;
             elements.Add(cc);
         }
-
-        Debug.Assert(fs.Position == end);
-    }
-
-
-    public List<FourCCTextureMeta> ExtractTextureMetadata()
-    {
-        var metaList = new List<FourCCTextureMeta>();
-        var textures = Root.GetChild("ATLS").GetChild("TXTS").Children;
-        foreach (var tex in textures)
-        {
-            var meta = new FourCCTextureMeta
-            {
-                Name = tex.GetChild("NAME").Str,
-                Width = (int)tex.GetChild("WDTH").UInt,
-                Height = (int)tex.GetChild("HGHT").UInt,
-                X = (int)tex.GetChild("XXXX").UInt,
-                Y = (int)tex.GetChild("YYYY").UInt
-            };
-            metaList.Add(meta);
-        }
-
-        return metaList;
     }
 
     public void Write(Stream fs, BinaryWriter writer)
     {
-        Write(fs, writer, Root);
+        if (Root is not null) Write(fs, writer, Root);
     }
 
     public void Write(Stream fs, BinaryWriter writer, FourCCElement element)
     {
-        var header = new GTSFourCCMetadata
-        {
-            FourCCName = element.FourCC
-        };
+        ArgumentNullException.ThrowIfNull(fs);
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(element);
 
-        var length = element.Type switch
+        var header = new GTSFourCCMetadata { FourCCName = element.FourCC };
+        var cleanString = element.Type == FourCCElementType.String ? element.Str.Replace(Path.DirectorySeparatorChar, '\\') : string.Empty;
+
+        uint length = element.Type switch
         {
-            FourCCElementType.Node => (uint)0x10000000,
-            FourCCElementType.Int => (uint)4,
-            FourCCElementType.String => (UInt32)Encoding.Unicode.GetBytes(element.Str).Length + 2,
-            FourCCElementType.BinaryInt or FourCCElementType.BinaryGuid => (UInt32)element.Blob.Length,
-            _ => throw new InvalidDataException($"Unsupported FourCC value type: {element.Type}"),
+            FourCCElementType.Node => 0,
+            FourCCElementType.Int => 4,
+            FourCCElementType.String => (uint)Encoding.Unicode.GetByteCount(cleanString) + 2,
+            FourCCElementType.BinaryInt or FourCCElementType.BinaryGuid => (uint)element.Blob.Length,
+            _ => throw new InvalidDataException()
         };
 
         header.Format = element.Type switch
         {
             FourCCElementType.Node => 1,
-            FourCCElementType.Int => 3,
             FourCCElementType.String => 2,
+            FourCCElementType.Int => 3,
             FourCCElementType.BinaryInt => 8,
             FourCCElementType.BinaryGuid => 0xD,
-            _ => throw new InvalidDataException($"Unsupported FourCC value type: {element.Type}"),
+            _ => throw new InvalidDataException()
         };
 
-        header.Length = (UInt16)(length & 0xffff);
+        header.Length = (ushort)(length & 0xffff);
+        if (length > 0xffff) header.ExtendedLength = 1;
+
+        Span<byte> structBuffer = stackalloc byte[Unsafe.SizeOf<GTSFourCCMetadata>()];
+        MemoryMarshal.Write(structBuffer, in header);
+        fs.Write(structBuffer);
+
         if (length > 0xffff)
         {
-            header.ExtendedLength = 1;
-        }
-
-        BinUtils.WriteStruct<GTSFourCCMetadata>(writer, ref header);
-
-        if (length > 0xffff)
-        {
-            UInt32 extraLength = length >> 16;
-            writer.Write(extraLength);
+            Span<byte> extLenBytes = stackalloc byte[4];
+            BinaryPrimitives.WriteUInt32LittleEndian(extLenBytes, length >> 16);
+            fs.Write(extLenBytes);
         }
 
         switch (element.Type)
         {
             case FourCCElementType.Node:
-                {
-                    var lengthOffset = fs.Position - 6;
-                    var childrenOffset = fs.Position;
-                    foreach (var child in element.Children)
-                    {
-                        Write(fs, writer, child);
-                    }
-                    var endOffset = fs.Position;
-                    var childrenSize = (UInt32)(endOffset - childrenOffset);
+                var lengthOffset = fs.Position - 6;
+                var childrenOffset = fs.Position;
 
-                    // Re-write node header with final node size
-                    fs.Position = lengthOffset;
-                    writer.Write((UInt32)childrenSize);
-                    fs.Position = endOffset;
+                foreach (var child in CollectionsMarshal.AsSpan(element.Children)) Write(fs, writer, child);
 
-                    break;
-                }
+                var endOffset = fs.Position;
+                var childrenSize = (uint)(endOffset - childrenOffset);
+
+                fs.Position = lengthOffset;
+                Span<byte> sizeBytes = stackalloc byte[4];
+                BinaryPrimitives.WriteUInt32LittleEndian(sizeBytes, childrenSize);
+                fs.Write(sizeBytes);
+                fs.Position = endOffset;
+                break;
 
             case FourCCElementType.Int:
-                writer.Write(element.UInt);
+                Span<byte> intBytes = stackalloc byte[4];
+                BinaryPrimitives.WriteUInt32LittleEndian(intBytes, element.UInt);
+                fs.Write(intBytes);
                 break;
 
             case FourCCElementType.String:
-                writer.Write(Encoding.Unicode.GetBytes(element.Str));
-                writer.Write((UInt16)0); // null terminator
+                var stringBytes = Encoding.Unicode.GetBytes(cleanString);
+                fs.Write(stringBytes);
+
+                Span<byte> terminatorBytes = stackalloc byte[2]; 
+                fs.Write(terminatorBytes);
                 break;
 
             case FourCCElementType.BinaryInt:
             case FourCCElementType.BinaryGuid:
-                writer.Write(element.Blob);
+                fs.Write(element.Blob);
                 break;
-
-            default:
-                throw new InvalidDataException($"Unsupported FourCC value type: {element.Type}");
         }
 
-        while ((fs.Position % 4) != 0)
+        var alignedPosition = (fs.Position + 3) & ~3L;
+        var paddingCount = (int)(alignedPosition - fs.Position);
+        if (paddingCount > 0)
         {
-            writer.Write((Byte)0);
+            Span<byte> paddingZeroes = stackalloc byte[3];
+            fs.Write(paddingZeroes[..paddingCount]);
         }
     }
 }
 
-public class VirtualTileSet : IDisposable
+public sealed class VirtualTileSet : IDisposable
 {
-    public String PagePath;
+    public string PagePath { get; set; } = string.Empty;
     public GTSHeader Header;
-    public GTSTileSetLayer[] TileSetLayers;
-    public GTSTileSetLevel[] TileSetLevels;
-    public List<UInt32[]> PerLevelFlatTileIndices;
-    public GTSParameterBlockHeader[] ParameterBlockHeaders;
-    public Dictionary<UInt32, object> ParameterBlocks;
-    public List<PageFileInfo> PageFileInfos;
-    public TileSetFourCC FourCCMetadata;
-    public GTSThumbnailInfo[] ThumbnailInfos;
-    public GTSPackedTileID[] PackedTileIDs;
-    public GTSFlatTileInfo[] FlatTileInfos;
+    public GTSTileSetLayer[] TileSetLayers { get; set; } = [];
+    public GTSTileSetLevel[] TileSetLevels { get; set; } = [];
+    public List<uint[]> PerLevelFlatTileIndices { get; set; } = [];
+    public GTSParameterBlockHeader[] ParameterBlockHeaders { get; set; } = [];
+    public Dictionary<uint, object> ParameterBlocks { get; set; } = [];
+    public List<PageFileInfo> PageFileInfos { get; set; } = [];
+    public TileSetFourCC FourCCMetadata { get; set; } = new();
+    public GTSThumbnailInfo[] ThumbnailInfos { get; set; } = [];
+    public GTSPackedTileID[] PackedTileIDs { get; set; } = [];
+    public GTSFlatTileInfo[] FlatTileInfos { get; set; } = [];
 
-    private readonly Dictionary<int, PageFile> PageFiles = [];
-    private readonly TileCompressor Compressor;
-
+    private readonly Dictionary<int, PageFile> _pageFiles = [];
+    private readonly TileCompressor _compressor = new()
+    {
+        ParameterBlocks = new ParameterBlockContainer()
+    };
     public VirtualTileSet(string path, string pagePath)
     {
-        PagePath = pagePath;
-        Compressor = new TileCompressor();
+        PagePath = pagePath ?? string.Empty;
+        var normalizedPath = path.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
 
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read);
+        using var fs = File.OpenRead(normalizedPath);
         using var reader = new BinaryReader(fs);
         LoadFromStream(fs, reader, false);
     }
 
-    public VirtualTileSet(string path) : this(path, Path.GetDirectoryName(path))
-    {
-    }
-
-    public VirtualTileSet()
-    {
-    }
+    public VirtualTileSet(string path) : this(path, Path.GetDirectoryName(path) ?? string.Empty) { }
+    public VirtualTileSet() { }
 
     public void Save(string path)
     {
-        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
+        var normalizedPath = path.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
+        using var fs = File.OpenWrite(normalizedPath);
         using var writer = new BinaryWriter(fs);
         SaveToStream(fs, writer);
     }
 
     public void Dispose()
     {
-        foreach (var pageFile in PageFiles)
+        foreach (var pageFile in _pageFiles.Values) pageFile.Dispose();
+        _pageFiles.Clear();
+    }
+
+    public PageFile GetOrLoadPageFile(int pageFileIdx)
+    {
+        ref var file = ref CollectionsMarshal.GetValueRefOrAddDefault(_pageFiles, pageFileIdx, out var exists);
+        if (!exists)
         {
-            pageFile.Value.Dispose();
+            var meta = PageFileInfos[pageFileIdx];
+            file = new PageFile(this, Path.Join(PagePath, meta.FileName));
+            file.Initialize();
         }
+        return file!;
     }
 
     private void LoadThumbnails(Stream fs, BinaryReader reader)
     {
         fs.Position = (long)Header.ThumbnailsOffset;
-        var thumbHdr = BinUtils.ReadStruct<GTSThumbnailInfoHeader>(reader);
-        ThumbnailInfos = new GTSThumbnailInfo[thumbHdr.NumThumbnails];
-        BinUtils.ReadStructs<GTSThumbnailInfo>(reader, ThumbnailInfos);
+        Span<byte> infoHdrBuffer = stackalloc byte[Unsafe.SizeOf<GTSThumbnailInfoHeader>()];
+        if (fs.Read(infoHdrBuffer) != infoHdrBuffer.Length) throw new EndOfStreamException();
 
+        var thumbHdr = MemoryMarshal.Read<GTSThumbnailInfoHeader>(infoHdrBuffer);
+        ThumbnailInfos = new GTSThumbnailInfo[thumbHdr.NumThumbnails];
+
+        Span<byte> infoArrayBuffer = MemoryMarshal.AsBytes(ThumbnailInfos.AsSpan());
+        if (fs.Read(infoArrayBuffer) != infoArrayBuffer.Length) throw new EndOfStreamException();
+
+        Span<byte> bcParamBuffer = stackalloc byte[Unsafe.SizeOf<GTSBCParameterBlock>()];
         foreach (var thumb in ThumbnailInfos)
         {
-            // Decompress thumbnail blob
-            fs.Position = (uint)thumb.OffsetInFile;
-            var inb = new byte[thumb.CompressedSize];
-            reader.Read(inb, 0, inb.Length);
-            var thumbnailBlob = Native.FastLZCompressor.Decompress(inb, Math.Max(thumb.Unknown2, thumb.Unknown3) * 0x100);
+            fs.Position = (long)thumb.OffsetInFile;
+            fs.Position += thumb.CompressedSize + 12;
 
-            var numSections = reader.ReadUInt32();
-            var parameterBlockSize = reader.ReadUInt32();
-            reader.ReadUInt32();
-            var e4 = BinUtils.ReadStruct<GTSBCParameterBlock>(reader);
-            int sectionNo = 0;
-            numSections -= 2;
-
-            while (numSections-- > 0)
-            {
-                var mipLevelSize = reader.ReadUInt32();
-                if (mipLevelSize > 0x10000)
-                {
-                    fs.Position -= 4;
-                    break;
-                }
-
-                var inf = new byte[mipLevelSize];
-                reader.Read(inf, 0, inf.Length);
-
-                sectionNo++;
-            }
+            if (fs.Read(bcParamBuffer) != bcParamBuffer.Length) throw new EndOfStreamException();
+            _ = MemoryMarshal.Read<GTSBCParameterBlock>(bcParamBuffer);
         }
     }
 
+
     public void LoadFromStream(Stream fs, BinaryReader reader, bool loadThumbnails)
     {
-        Header = BinUtils.ReadStruct<GTSHeader>(reader);
+        ArgumentNullException.ThrowIfNull(fs);
+        ArgumentNullException.ThrowIfNull(reader);
 
-        fs.Position = (uint)Header.LayersOffset;
+        Span<byte> headerBuffer = stackalloc byte[Unsafe.SizeOf<GTSHeader>()];
+        if (fs.Read(headerBuffer) != headerBuffer.Length) throw new EndOfStreamException();
+        Header = MemoryMarshal.Read<GTSHeader>(headerBuffer);
+
+        fs.Position = (long)Header.LayersOffset;
         TileSetLayers = new GTSTileSetLayer[Header.NumLayers];
-        BinUtils.ReadStructs<GTSTileSetLayer>(reader, TileSetLayers);
+        Span<byte> layersArrayBuffer = MemoryMarshal.AsBytes(TileSetLayers.AsSpan());
+        if (fs.Read(layersArrayBuffer) != layersArrayBuffer.Length) throw new EndOfStreamException();
 
-        fs.Position = (uint)Header.LevelsOffset;
+        fs.Position = (long)Header.LevelsOffset;
         TileSetLevels = new GTSTileSetLevel[Header.NumLevels];
-        BinUtils.ReadStructs<GTSTileSetLevel>(reader, TileSetLevels);
+        Span<byte> levelsArrayBuffer = MemoryMarshal.AsBytes(TileSetLevels.AsSpan());
+        if (fs.Read(levelsArrayBuffer) != levelsArrayBuffer.Length) throw new EndOfStreamException();
 
         PerLevelFlatTileIndices = [];
         foreach (var level in TileSetLevels)
         {
-            fs.Position = (uint)level.FlatTileIndicesOffset;
-            var tileIndices = new UInt32[level.Height * level.Width * Header.NumLayers];
-            BinUtils.ReadStructs<UInt32>(reader, tileIndices);
+            fs.Position = (long)level.FlatTileIndicesOffset;
+            var elementCount = level.Height * level.Width * (int)Header.NumLayers;
+            var tileIndices = new uint[elementCount];
+
+            Span<byte> indicesArrayBuffer = MemoryMarshal.AsBytes(tileIndices.AsSpan());
+            if (fs.Read(indicesArrayBuffer) != indicesArrayBuffer.Length) throw new EndOfStreamException();
+
+            if (!BitConverter.IsLittleEndian)
+            {
+                for (int i = 0; i < tileIndices.Length; i++)
+                    tileIndices[i] = BinaryPrimitives.ReverseEndianness(tileIndices[i]);
+            }
+
             PerLevelFlatTileIndices.Add(tileIndices);
         }
 
-        fs.Position = (uint)Header.ParameterBlockHeadersOffset;
+        fs.Position = (long)Header.ParameterBlockHeadersOffset;
         ParameterBlockHeaders = new GTSParameterBlockHeader[Header.ParameterBlockHeadersCount];
-        BinUtils.ReadStructs<GTSParameterBlockHeader>(reader, ParameterBlockHeaders);
+        Span<byte> paramHeadersArrayBuffer = MemoryMarshal.AsBytes(ParameterBlockHeaders.AsSpan());
+        if (fs.Read(paramHeadersArrayBuffer) != paramHeadersArrayBuffer.Length) throw new EndOfStreamException();
 
         ParameterBlocks = [];
+        Span<byte> bcBlockBuffer = stackalloc byte[Unsafe.SizeOf<GTSBCParameterBlock>()];
+        Span<byte> uniformBlockBuffer = stackalloc byte[Unsafe.SizeOf<GTSUniformParameterBlock>()];
+
         foreach (var hdr in ParameterBlockHeaders)
         {
-            fs.Position = (uint)hdr.FileInfoOffset;
-            if (hdr.Codec == GTSCodec.BC)
+            fs.Position = (long)hdr.FileInfoOffset;
+            if (hdr.Codec == GTSCodec.BC3)
             {
-                Debug.Assert(hdr.ParameterBlockSize == 0x38);
-                var bc = BinUtils.ReadStruct<GTSBCParameterBlock>(reader);
-                ParameterBlocks.Add(hdr.ParameterBlockID, bc);
-                Debug.Assert(bc.Version == 0x238e);
-                Debug.Assert(bc.B == 0);
-                Debug.Assert(bc.C1 == 0);
-                Debug.Assert(bc.C2 == 0);
-                Debug.Assert(bc.BCField3 == 0);
-                Debug.Assert(bc.DataType == (Byte)GTSDataType.R8G8B8A8_SRGB || bc.DataType == (Byte)GTSDataType.X8Y8Z8W8);
-                Debug.Assert(bc.D == 0);
-                Debug.Assert(bc.FourCC == 0x20334342);
-                Debug.Assert(bc.E1 == 0);
-                Debug.Assert(bc.SaveMip == 1);
-                Debug.Assert(bc.E3 == 0);
-                Debug.Assert(bc.E4 == 0);
-                Debug.Assert(bc.F == 0);
+                if (fs.Read(bcBlockBuffer) != bcBlockBuffer.Length) throw new EndOfStreamException();
+                ParameterBlocks.Add(hdr.ParameterBlockID, MemoryMarshal.Read<GTSBCParameterBlock>(bcBlockBuffer));
             }
             else
             {
-                Debug.Assert(hdr.Codec == GTSCodec.Uniform);
-                Debug.Assert(hdr.ParameterBlockSize == 0x10);
-
-                var blk = BinUtils.ReadStruct<GTSUniformParameterBlock>(reader);
-                Debug.Assert(blk.Version == 0x42);
-                Debug.Assert(blk.A_Unused == 0);
-                Debug.Assert(blk.Width == 4);
-                Debug.Assert(blk.Height == 1);
-                Debug.Assert(blk.DataType == GTSDataType.R8G8B8A8_SRGB || blk.DataType == GTSDataType.X8Y8Z8W8);
-                ParameterBlocks.Add(hdr.ParameterBlockID, blk);
+                if (fs.Read(uniformBlockBuffer) != uniformBlockBuffer.Length) throw new EndOfStreamException();
+                ParameterBlocks.Add(hdr.ParameterBlockID, MemoryMarshal.Read<GTSUniformParameterBlock>(uniformBlockBuffer));
             }
         }
 
         fs.Position = (long)Header.PageFileMetadataOffset;
         var pageFileInfos = new GTSPageFileInfo[Header.NumPageFiles];
-        BinUtils.ReadStructs<GTSPageFileInfo>(reader, pageFileInfos);
+        Span<byte> pageFilesArrayBuffer = MemoryMarshal.AsBytes(pageFileInfos.AsSpan());
+        if (fs.Read(pageFilesArrayBuffer) != pageFilesArrayBuffer.Length) throw new EndOfStreamException();
 
         PageFileInfos = [];
         uint nextPageIndex = 0;
         foreach (var info in pageFileInfos)
         {
-            PageFileInfos.Add(new PageFileInfo
-            {
-                Meta = info,
-                FirstPageIndex = nextPageIndex,
-                FileName = info.FileName
-            });
+            PageFileInfos.Add(new PageFileInfo { Meta = info, FirstPageIndex = nextPageIndex, FileName = info.FileName });
             nextPageIndex += info.NumPages;
         }
 
@@ -462,74 +588,85 @@ public class VirtualTileSet : IDisposable
         FourCCMetadata = new TileSetFourCC();
         FourCCMetadata.Read(fs, reader, Header.FourCCListSize);
 
-        if (loadThumbnails)
-        {
-            LoadThumbnails(fs, reader);
-        }
+        if (loadThumbnails) LoadThumbnails(fs, reader);
 
         fs.Position = (long)Header.PackedTileIDsOffset;
         PackedTileIDs = new GTSPackedTileID[Header.NumPackedTileIDs];
-        BinUtils.ReadStructs<GTSPackedTileID>(reader, PackedTileIDs);
+        Span<byte> packedTilesArrayBuffer = MemoryMarshal.AsBytes(PackedTileIDs.AsSpan());
+        if (fs.Read(packedTilesArrayBuffer) != packedTilesArrayBuffer.Length) throw new EndOfStreamException();
 
         fs.Position = (long)Header.FlatTileInfoOffset;
         FlatTileInfos = new GTSFlatTileInfo[Header.NumFlatTileInfos];
-        BinUtils.ReadStructs<GTSFlatTileInfo>(reader, FlatTileInfos);
+        Span<byte> flatTilesArrayBuffer = MemoryMarshal.AsBytes(FlatTileInfos.AsSpan());
+        if (fs.Read(flatTilesArrayBuffer) != flatTilesArrayBuffer.Length) throw new EndOfStreamException();
     }
-
     public void SaveToStream(Stream fs, BinaryWriter writer)
     {
-        BinUtils.WriteStruct<GTSHeader>(writer, ref Header);
+        ArgumentNullException.ThrowIfNull(fs);
+        ArgumentNullException.ThrowIfNull(writer);
+
+        Span<byte> headerBuffer = stackalloc byte[Unsafe.SizeOf<GTSHeader>()];
+        MemoryMarshal.Write(headerBuffer, in Header);
+        fs.Write(headerBuffer);
 
         Header.LayersOffset = (ulong)fs.Position;
         Header.NumLayers = (uint)TileSetLayers.Length;
-        BinUtils.WriteStructs<GTSTileSetLayer>(writer, TileSetLayers);
 
-        for (var i = 0; i < TileSetLevels.Length; i++)
+        fs.Write(MemoryMarshal.AsBytes(TileSetLayers.AsSpan()));
+
+        var levelsSpan = TileSetLevels.AsSpan();
+        for (var i = 0; i < levelsSpan.Length; i++)
         {
-            ref var level = ref TileSetLevels[i];
+            ref var level = ref levelsSpan[i];
             level.FlatTileIndicesOffset = (ulong)fs.Position;
 
             var tileIndices = PerLevelFlatTileIndices[i];
-            Debug.Assert(tileIndices.Length == level.Height * level.Width * Header.NumLayers);
-
-            BinUtils.WriteStructs<UInt32>(writer, tileIndices);
+            fs.Write(MemoryMarshal.AsBytes(tileIndices.AsSpan()));
         }
 
         Header.LevelsOffset = (ulong)fs.Position;
         Header.NumLevels = (uint)TileSetLevels.Length;
-        BinUtils.WriteStructs<GTSTileSetLevel>(writer, TileSetLevels);
+        fs.Write(MemoryMarshal.AsBytes(levelsSpan));
 
         Header.ParameterBlockHeadersOffset = (ulong)fs.Position;
         Header.ParameterBlockHeadersCount = (uint)ParameterBlockHeaders.Length;
-        BinUtils.WriteStructs<GTSParameterBlockHeader>(writer, ParameterBlockHeaders);
 
-        for (var i = 0; i < ParameterBlockHeaders.Length; i++)
+        var paramHeadersSpan = ParameterBlockHeaders.AsSpan();
+        fs.Write(MemoryMarshal.AsBytes(paramHeadersSpan));
+
+        Span<byte> uniformBuffer = stackalloc byte[Unsafe.SizeOf<GTSUniformParameterBlock>()];
+        Span<byte> bcBuffer = stackalloc byte[Unsafe.SizeOf<GTSBCParameterBlock>()];
+
+        for (var i = 0; i < paramHeadersSpan.Length; i++)
         {
-            ref var hdr = ref ParameterBlockHeaders[i];
+            ref var hdr = ref paramHeadersSpan[i];
             hdr.FileInfoOffset = (ulong)fs.Position;
 
-            if (hdr.Codec == GTSCodec.BC)
+            if (ParameterBlocks.TryGetValue(hdr.ParameterBlockID, out var block))
             {
-                var block = (GTSBCParameterBlock)ParameterBlocks[hdr.ParameterBlockID];
-                BinUtils.WriteStruct<GTSBCParameterBlock>(writer, ref block);
-            }
-            else
-            {
-                Debug.Assert(hdr.Codec == GTSCodec.Uniform);
-                hdr.ParameterBlockSize = 0x10;
-
-                var block = (GTSUniformParameterBlock)ParameterBlocks[hdr.ParameterBlockID];
-                BinUtils.WriteStruct<GTSUniformParameterBlock>(writer, ref block);
+                if (hdr.Codec == GTSCodec.BC3 && block is GTSBCParameterBlock bcBlock)
+                {
+                    MemoryMarshal.Write(bcBuffer, in bcBlock);
+                    fs.Write(bcBuffer);
+                }
+                else if (hdr.Codec == GTSCodec.Uniform && block is GTSUniformParameterBlock uniformBlock)
+                {
+                    hdr.ParameterBlockSize = 0x10;
+                    MemoryMarshal.Write(uniformBuffer, in uniformBlock);
+                    fs.Write(uniformBuffer);
+                }
             }
         }
 
         Header.PageFileMetadataOffset = (ulong)fs.Position;
         Header.NumPageFiles = (uint)PageFileInfos.Count;
-
-        for (var i = 0; i < PageFileInfos.Count; i++)
+        Span<byte> pageFileBuffer = stackalloc byte[Unsafe.SizeOf<GTSPageFileInfo>()];
+        foreach (var fileInfo in CollectionsMarshal.AsSpan(PageFileInfos))
         {
-            var pageFile = PageFileInfos[i];
-            BinUtils.WriteStruct<GTSPageFileInfo>(writer, ref pageFile.Meta);
+            var metaCopy = fileInfo.Meta;
+            MemoryMarshal.Write(pageFileBuffer, in metaCopy);
+
+            fs.Write(pageFileBuffer);
         }
 
         Header.FourCCListOffset = (ulong)fs.Position;
@@ -537,69 +674,130 @@ public class VirtualTileSet : IDisposable
         Header.FourCCListSize = (uint)((ulong)fs.Position - Header.FourCCListOffset);
 
         Header.ThumbnailsOffset = (ulong)fs.Position;
-        var thumbHdr = new GTSThumbnailInfoHeader
-        {
-            NumThumbnails = 0
-        };
-        BinUtils.WriteStruct<GTSThumbnailInfoHeader>(writer, ref thumbHdr);
+        var thumbHdr = new GTSThumbnailInfoHeader { NumThumbnails = 0 };
+        Span<byte> thumbHdrBuffer = stackalloc byte[Unsafe.SizeOf<GTSThumbnailInfoHeader>()];
+        MemoryMarshal.Write(thumbHdrBuffer, in thumbHdr);
+        fs.Write(thumbHdrBuffer);
 
         Header.PackedTileIDsOffset = (ulong)fs.Position;
         Header.NumPackedTileIDs = (uint)PackedTileIDs.Length;
-        BinUtils.WriteStructs<GTSPackedTileID>(writer, PackedTileIDs);
+        fs.Write(MemoryMarshal.AsBytes(PackedTileIDs.AsSpan()));
 
         Header.FlatTileInfoOffset = (ulong)fs.Position;
         Header.NumFlatTileInfos = (uint)FlatTileInfos.Length;
-        BinUtils.WriteStructs<GTSFlatTileInfo>(writer, FlatTileInfos);
+        fs.Write(MemoryMarshal.AsBytes(FlatTileInfos.AsSpan()));
 
-        // Re-write structures that contain offset information
+        var currentPosition = fs.Position;
         fs.Position = 0;
-        BinUtils.WriteStruct<GTSHeader>(writer, ref Header);
+        MemoryMarshal.Write(headerBuffer, in Header);
+        fs.Write(headerBuffer);
 
         fs.Position = (long)Header.ParameterBlockHeadersOffset;
-        BinUtils.WriteStructs<GTSParameterBlockHeader>(writer, ParameterBlockHeaders);
+        fs.Write(MemoryMarshal.AsBytes(paramHeadersSpan));
+        fs.Position = currentPosition;
     }
 
     public bool GetTileInfo(int level, int layer, int x, int y, ref GTSFlatTileInfo tile)
     {
         var tileIndices = PerLevelFlatTileIndices[level];
-        var tileIndex = tileIndices[layer + Header.NumLayers * (x + y * TileSetLevels[level].Width)];
+        var tileIndex = tileIndices[layer + (int)Header.NumLayers * (x + (y * TileSetLevels[level].Width))];
+
         if ((tileIndex & 0x80000000) == 0)
         {
             tile = FlatTileInfos[tileIndex];
             return true;
         }
-        else
-        {
-            return false;
-        }
+        return false;
     }
 
-    public PageFile GetOrLoadPageFile(int pageFileIdx)
+    public void Validate()
     {
-        if (!PageFiles.TryGetValue(pageFileIdx, out PageFile file))
+        foreach (var tileId in PackedTileIDs.AsSpan())
         {
-            var meta = PageFileInfos[pageFileIdx];
-            file = new PageFile(this, Path.Join(PagePath, meta.FileName));
-            PageFiles.Add(pageFileIdx, file);
+            if (tileId.Level >= TileSetLevels.Length)
+                throw new InvalidDataException($"Tile references nonexistent level {tileId.Level}");
+            if (tileId.Layer >= TileSetLayers.Length)
+                throw new InvalidDataException($"Tile references nonexistent layer {tileId.Layer}");
+
+            var level = TileSetLevels[tileId.Level];
+            if (tileId.X >= level.Width || tileId.Y >= level.Height)
+                throw new InvalidDataException($"Tile references out of bounds map coordinates: {tileId.X},{tileId.Y}");
         }
 
-        return file;
+        var pageFileInfosSpan = CollectionsMarshal.AsSpan(PageFileInfos);
+        for (var i = 0; i < pageFileInfosSpan.Length; i++)
+        {
+            GetOrLoadPageFile(i);
+        }
+
+        foreach (var (i, file) in _pageFiles)
+        {
+            var info = pageFileInfosSpan[i];
+
+            if (info.Meta.NumPages != file.ChunkOffsets.Count)
+                throw new InvalidDataException($"Page count mismatch in metadata: {info.FileName}");
+
+            if (info.Meta.Checksum != file.Header.GUID)
+                throw new InvalidDataException($"Checksum mismatch in metadata: {info.FileName}");
+        }
+
+        foreach (var tileInfo in FlatTileInfos.AsSpan())
+        {
+            if (tileInfo.PageFileIndex >= (uint)pageFileInfosSpan.Length)
+                throw new InvalidDataException($"Flat tile maps to a nonexistent page file index: {tileInfo.PageFileIndex}");
+
+            var file = _pageFiles[(int)tileInfo.PageFileIndex];
+            if (tileInfo.PageIndex >= file.ChunkOffsets.Count)
+                throw new InvalidDataException($"Flat tile references nonexistent page index {tileInfo.PageFileIndex}:{tileInfo.PageIndex}");
+
+            if (tileInfo.ChunkIndex >= (uint)file.ChunkOffsets[(int)tileInfo.PageIndex].Length)
+                throw new InvalidDataException($"Flat tile references nonexistent chunk index {tileInfo.PageFileIndex}:{tileInfo.PageIndex}:{tileInfo.ChunkIndex}");
+
+            if (tileInfo.PackedTileIndex >= PackedTileIDs.Length)
+                throw new InvalidDataException($"Flat tile maps to a nonexistent packed tile index: {tileInfo.PackedTileIndex}");
+        }
+
+        foreach (var levelInds in CollectionsMarshal.AsSpan(PerLevelFlatTileIndices))
+        {
+            if (levelInds is null) continue;
+
+            foreach (var tileIndex in levelInds.AsSpan())
+            {
+                if ((tileIndex & 0x80000000) == 0)
+                {
+                    if (tileIndex >= (uint)FlatTileInfos.Length)
+                        throw new InvalidDataException($"Level indices link to an unmapped flat tile target: {tileIndex}");
+                }
+                else
+                {
+                    var downsampleIndex = tileIndex & ~0x80000000u;
+                    if (downsampleIndex >= (uint)FlatTileInfos.Length)
+                        throw new InvalidDataException($"Level indices link to an unmapped downsampled tile target: {downsampleIndex}");
+                }
+            }
+        }
     }
 
     public void StitchTexture(int level, int layer, int minX, int minY, int maxX, int maxY, BC3Image output)
     {
-        var tileWidth = Header.TileWidth - Header.TileBorder * 2;
-        var tileHeight = Header.TileHeight - Header.TileBorder * 2;
-        GTSFlatTileInfo tileInfo = new();
+        ArgumentNullException.ThrowIfNull(output);
+
+        var borderOffset = (int)Header.TileBorder << 1;
+        var tileWidth = (int)Header.TileWidth - borderOffset;
+        var tileHeight = (int)Header.TileHeight - borderOffset;
+        GTSFlatTileInfo tileInfo = default;
+
         for (var y = minY; y <= maxY; y++)
         {
+            var dstY = (y - minY) * tileHeight;
             for (var x = minX; x <= maxX; x++)
             {
                 if (GetTileInfo(level, layer, x, y, ref tileInfo))
                 {
-                    var pageFile = GetOrLoadPageFile(tileInfo.PageFileIndex);
-                    var tile = pageFile.UnpackTileBC3(tileInfo.PageIndex, tileInfo.ChunkIndex, Compressor);
-                    tile.CopyTo(output, 8, 8, (x - minX) * tileWidth, (y - minY) * tileHeight, tileWidth, tileHeight);
+                    var pageFile = GetOrLoadPageFile((int)tileInfo.PageFileIndex);
+                    var tile = pageFile.UnpackTileBC3(tileInfo.PageIndex, tileInfo.ChunkIndex, _compressor);
+
+                    tile.CopyTo(output, (int)Header.TileBorder, (int)Header.TileBorder, (x - minX) * tileWidth, dstY, tileWidth, tileHeight);
                 }
             }
         }
@@ -607,52 +805,84 @@ public class VirtualTileSet : IDisposable
 
     public BC3Image ExtractTexture(int level, int layer, int minX, int minY, int maxX, int maxY)
     {
-        var width = (maxX - minX + 1) * (Header.TileWidth - Header.TileBorder * 2);
-        var height = (maxY - minY + 1) * (Header.TileHeight - Header.TileBorder * 2);
+        var borderOffset = (int)Header.TileBorder << 1;
+        var tileWidth = (int)Header.TileWidth - borderOffset;
+        var tileHeight = (int)Header.TileHeight - borderOffset;
+
+        var width = (maxX - minX + 1) * tileWidth;
+        var height = (maxY - minY + 1) * tileHeight;
+
         var stitched = new BC3Image(width, height);
         StitchTexture(level, layer, minX, minY, maxX, maxY, stitched);
         return stitched;
     }
 
-    public int FindPageFile(string name)
+    public BC3Image? ExtractTexture(int level, int layer, VirtualTextureInfo tex)
     {
-        for (var i = 0; i < PageFileInfos.Count; i++)
-        {
-            if (PageFileInfos[i].FileName.Contains(name))
-            {
-                return i;
-            }
-        }
+        ArgumentNullException.ThrowIfNull(tex);
 
-        return -1;
-    }
+        var borderOffset = (int)Header.TileBorder << 1;
+        var tlW = (int)Header.TileWidth - borderOffset;
+        var tlH = (int)Header.TileHeight - borderOffset;
 
-    public void ReleasePageFiles()
-    {
-        this.PageFiles.Clear();
-    }
-
-    public BC3Image ExtractTexture(int level, int layer, FourCCTextureMeta tex)
-    {
-        var tlW = Header.TileWidth - Header.TileBorder * 2;
-        var tlH = Header.TileHeight - Header.TileBorder * 2;
         var tX = tex.X / tlW;
         var tY = tex.Y / tlH;
         var tW = tex.Width / tlW;
         var tH = tex.Height / tlH;
-        var lv = (1 << level);
 
-        var minX = (tX / lv) + ((tX % lv) > 0 ? 1 : 0);
-        var minY = (tY / lv) + ((tY % lv) > 0 ? 1 : 0);
-        var maxX = ((tX+tW) / lv) + (((tX + tW) % lv) > 0 ? 1 : 0) - 1;
-        var maxY = ((tY+tH) / lv) + (((tY + tH) % lv) > 0 ? 1 : 0) - 1;
+        var lv = 1 << level;
 
-         return ExtractTextureIfExists(level, layer, minX, minY, maxX, maxY);
+        var minX = (tX / lv) + ((tX % lv > 0) ? 1 : 0);
+        var minY = (tY / lv) + ((tY % lv > 0) ? 1 : 0);
+        var maxX = ((tX + tW) / lv) + (((tX + tW) % lv > 0) ? 1 : 0) - 1;
+        var maxY = ((tY + tH) / lv) + (((tY + tH) % lv > 0) ? 1 : 0) - 1;
+
+        return ExtractTextureIfExists(level, layer, minX, minY, maxX, maxY);
     }
 
-    public BC3Image ExtractTextureIfExists(int levelIndex, int layer, int minX, int minY, int maxX, int maxY)
+    public int FindPageFile(string name)
     {
-        GTSFlatTileInfo tile = new();
+        ArgumentNullException.ThrowIfNull(name);
+
+        var fileInfosSpan = CollectionsMarshal.AsSpan(PageFileInfos);
+        for (var i = 0; i < fileInfosSpan.Length; i++)
+        {
+            if (fileInfosSpan[i].FileName.Contains(name, StringComparison.OrdinalIgnoreCase))
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    public void ReleasePageFiles() => _pageFiles.Clear();
+
+    public BC3Image? ExtractTexture(int level, int layer, FourCCTextureMeta tex)
+    {
+        ArgumentNullException.ThrowIfNull(tex);
+
+        var borderOffset = (int)Header.TileBorder << 1;
+        var tlW = (int)Header.TileWidth - borderOffset;
+        var tlH = (int)Header.TileHeight - borderOffset;
+
+        var tX = tex.X / tlW;
+        var tY = tex.Y / tlH;
+        var tW = tex.Width / tlW;
+        var tH = tex.Height / tlH;
+
+        var lv = 1 << level;
+
+        var minX = (tX / lv) + ((tX % lv > 0) ? 1 : 0);
+        var minY = (tY / lv) + ((tY % lv > 0) ? 1 : 0);
+        var maxX = ((tX + tW) / lv) + (((tX + tW) % lv > 0) ? 1 : 0) - 1;
+        var maxY = ((tY + tH) / lv) + (((tY + tH) % lv > 0) ? 1 : 0) - 1;
+
+        return ExtractTextureIfExists(level, layer, minX, minY, maxX, maxY);
+    }
+
+    public BC3Image? ExtractTextureIfExists(int levelIndex, int layer, int minX, int minY, int maxX, int maxY)
+    {
+        GTSFlatTileInfo tile = default;
         for (var x = minX; x <= maxX; x++)
         {
             for (var y = minY; y <= maxY; y++)
@@ -663,97 +893,6 @@ public class VirtualTileSet : IDisposable
                 }
             }
         }
-
         return ExtractTexture(levelIndex, layer, minX, minY, maxX, maxY);
-    }
-
-
-    public void Validate()
-    {
-        // Preload pagefiles
-        for (var i = 0; i < PageFileInfos.Count; i++)
-        {
-            GetOrLoadPageFile(i);
-        }
-
-        foreach (var (i,file) in PageFiles)
-        {
-            var info = PageFileInfos[i];
-
-            if (info.Meta.NumPages != file.ChunkOffsets.Count)
-            {
-                throw new InvalidDataException($"Page count mismatch in metadata: {info.Meta.FileName}");
-            }
-
-            if (info.Meta.Checksum != file.Header.GUID)
-            {
-                throw new InvalidDataException($"Checksum mismatch in metadata: {info.Meta.FileName}");
-            }
-        }
-
-        foreach (var tileId in PackedTileIDs)
-        {
-            if (tileId.Level >= TileSetLevels.Length)
-            {
-                throw new InvalidDataException($"Tile references nonexistent level {tileId.Level}");
-            }
-
-            if (tileId.Layer >= TileSetLayers.Length)
-            {
-                throw new InvalidDataException($"Tile references nonexistent layer {tileId.Layer}");
-            }
-
-            var level = TileSetLevels[tileId.Level];
-            if (tileId.X >= level.Width || tileId.Y >= level.Height)
-            {
-                throw new InvalidDataException($"Tile references nonexistent position {tileId.X},{tileId.Y}");
-            }
-        }
-
-        foreach (var tileInfo in FlatTileInfos)
-        {
-            if (tileInfo.PageFileIndex >= PageFileInfos.Count)
-            {
-                throw new InvalidDataException($"Flat tile references nonexistent pagefile {tileInfo.PageFileIndex}");
-            }
-
-            var file = PageFiles[tileInfo.PageFileIndex];
-            if (tileInfo.PageIndex >= file.ChunkOffsets.Count)
-            {
-                throw new InvalidDataException($"Flat tile references nonexistent page index {tileInfo.PageFileIndex}:{tileInfo.PageIndex}");
-            }
-
-            if (tileInfo.ChunkIndex >= file.ChunkOffsets[tileInfo.PageIndex].Length)
-            {
-                throw new InvalidDataException($"Flat tile references nonexistent chunk index {tileInfo.PageFileIndex}:{tileInfo.PageIndex}:{tileInfo.ChunkIndex}");
-            }
-
-            if (tileInfo.PackedTileIndex >= PackedTileIDs.Length)
-            {
-                throw new InvalidDataException($"Flat tile references nonexistent packed tile {tileInfo.PackedTileIndex}");
-            }
-        }
-
-        foreach (var levelInds in PerLevelFlatTileIndices)
-        {
-            foreach (var tileIndex in levelInds)
-            {
-                if ((tileIndex & 0x80000000) == 0)
-                {
-                    if (tileIndex >= FlatTileInfos.Length)
-                    {
-                        throw new InvalidDataException($"Level map references nonexistent flat tile {tileIndex}");
-                    }
-                }
-                else
-                {
-                    var downsampleIndex = tileIndex & ~0x80000000u;
-                    if (downsampleIndex >= FlatTileInfos.Length)
-                    {
-                        throw new InvalidDataException($"Level map references nonexistent downsampled flat tile {downsampleIndex}");
-                    }
-                }
-            }
-        }
     }
 }

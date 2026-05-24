@@ -1,63 +1,58 @@
 ﻿namespace LSLib.LS.Story;
 
-public class Story
+public sealed class Story
 {
-    public byte MinorVersion;
-    public byte MajorVersion;
-    // Use 16-bit instead of 32-bit type IDs, BG3 Patch8+
-    public bool ShortTypeIds;
-    public SaveFileHeader Header;
-    public Dictionary<uint, OsirisEnum> Enums;
-    public Dictionary<uint, OsirisType> Types;
-    public List<OsirisDivObject> DivObjects;
-    public List<Function> Functions;
-    public Dictionary<uint, Node> Nodes;
-    public Dictionary<uint, Adapter> Adapters;
-    public Dictionary<uint, Database> Databases;
-    public Dictionary<uint, Goal> Goals;
-    public List<Call> GlobalActions;
-    public List<string> ExternalStringTable;
-    public Dictionary<string, Function> FunctionSignatureMap;
+    public byte MinorVersion { get; set; }
+    public byte MajorVersion { get; set; }
+    public bool ShortTypeIds { get; set; }
+    public SaveFileHeader Header { get; set; } = null!;
+    public Dictionary<uint, OsirisEnum> Enums { get; set; } = [];
+    public Dictionary<uint, OsirisType> Types { get; set; } = [];
+    public List<OsirisDivObject> DivObjects { get; set; } = [];
+    public List<Function> Functions { get; set; } = [];
+    public Dictionary<uint, Node> Nodes { get; set; } = [];
+    public Dictionary<uint, Adapter> Adapters { get; set; } = [];
+    public Dictionary<uint, Database> Databases { get; set; } = [];
+    public Dictionary<uint, Goal> Goals { get; set; } = [];
+    public List<Call> GlobalActions { get; set; } = [];
+    public List<string> ExternalStringTable { get; set; } = [];
+    public Dictionary<string, Function> FunctionSignatureMap { get; set; } = new(StringComparer.Ordinal);
 
-    public uint Version
-    {
-        get
-        {
-            return ((uint)MajorVersion << 8) | (uint)MinorVersion;
-        }
-    }
+    public uint Version => ((uint)MajorVersion << 8) | MinorVersion;
 
     public void DebugDump(TextWriter writer)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+
         writer.WriteLine(" --- ENUMS ---");
-        foreach (var e in Enums)
+        foreach (KeyValuePair<uint, OsirisEnum> e in Enums)
         {
             e.Value.DebugDump(writer);
         }
-        
+
         writer.WriteLine(" --- TYPES ---");
-        foreach (var type in Types)
+        foreach (KeyValuePair<uint, OsirisType> type in Types)
         {
             type.Value.DebugDump(writer);
         }
 
         writer.WriteLine();
         writer.WriteLine(" --- DIV OBJECTS ---");
-        foreach (var obj in DivObjects)
+        foreach (OsirisDivObject obj in DivObjects)
         {
             obj.DebugDump(writer);
         }
 
         writer.WriteLine();
         writer.WriteLine(" --- FUNCTIONS ---");
-        foreach (var function in Functions)
+        foreach (Function function in Functions)
         {
             function.DebugDump(writer, this);
         }
 
         writer.WriteLine();
         writer.WriteLine(" --- NODES ---");
-        foreach (var node in Nodes)
+        foreach (KeyValuePair<uint, Node> node in Nodes)
         {
             writer.Write("#{0} ", node.Key);
             node.Value.DebugDump(writer, this);
@@ -66,7 +61,7 @@ public class Story
 
         writer.WriteLine();
         writer.WriteLine(" --- ADAPTERS ---");
-        foreach (var adapter in Adapters)
+        foreach (KeyValuePair<uint, Adapter> adapter in Adapters)
         {
             writer.Write("#{0} ", adapter.Key);
             adapter.Value.DebugDump(writer, this);
@@ -74,7 +69,7 @@ public class Story
 
         writer.WriteLine();
         writer.WriteLine(" --- DATABASES ---");
-        foreach (var database in Databases)
+        foreach (KeyValuePair<uint, Database> database in Databases)
         {
             writer.Write("#{0} ", database.Key);
             database.Value.DebugDump(writer, this);
@@ -82,7 +77,7 @@ public class Story
 
         writer.WriteLine();
         writer.WriteLine(" --- GOALS ---");
-        foreach (var goal in Goals)
+        foreach (KeyValuePair<uint, Goal> goal in Goals)
         {
             writer.Write("#{0} ", goal.Key);
             goal.Value.DebugDump(writer, this);
@@ -91,7 +86,7 @@ public class Story
 
         writer.WriteLine();
         writer.WriteLine(" --- GLOBAL ACTIONS ---");
-        foreach (var call in GlobalActions)
+        foreach (Call call in GlobalActions)
         {
             call.DebugDump(writer, this);
             writer.WriteLine();
@@ -100,40 +95,37 @@ public class Story
 
     public uint FindBuiltinTypeId(uint typeId)
     {
-        var aliasId = typeId;
+        uint aliasId = typeId;
 
-        while (typeId != 0 && Types[aliasId].Alias != 0)
+        while (typeId != 0 && Types.TryGetValue(aliasId, out OsirisType? type) && type.Alias != 0)
         {
-            aliasId = Types[aliasId].Alias;
+            aliasId = type.Alias;
         }
 
         return aliasId;
     }
 }
 
-public class StoryReader
+public sealed class StoryReader
 {
-    public StoryReader()
-    {
+    public StoryReader() { }
 
-    }
-
-    private List<string> ReadStrings(OsiReader reader)
+    private static List<string> ReadStrings(OsiReader reader)
     {
-        var stringTable = new List<string>();
-        var count = reader.ReadUInt32();
+        uint count = reader.ReadUInt32();
+        var stringTable = new List<string>((int)count);
         while (count-- > 0)
         {
-            stringTable.Add(reader.ReadString());
+            stringTable.Add(reader.ReadString() ?? string.Empty);
         }
 
         return stringTable;
     }
 
-    private Dictionary<uint, OsirisType> ReadTypes(OsiReader reader)
+    private static Dictionary<uint, OsirisType> ReadTypes(OsiReader reader)
     {
-        var types = new Dictionary<uint, OsirisType>();
-        var count = reader.ReadUInt32();
+        uint count = reader.ReadUInt32();
+        var types = new Dictionary<uint, OsirisType>((int)count);
         while (count-- > 0)
         {
             var type = new OsirisType();
@@ -144,10 +136,10 @@ public class StoryReader
         return types;
     }
 
-    private Dictionary<uint, OsirisEnum> ReadEnums(OsiReader reader)
+    private static Dictionary<uint, OsirisEnum> ReadEnums(OsiReader reader)
     {
-        var enums = new Dictionary<uint, OsirisEnum>();
-        var count = reader.ReadUInt32();
+        uint count = reader.ReadUInt32();
+        var enums = new Dictionary<uint, OsirisEnum>((int)count);
         while (count-- > 0)
         {
             var e = new OsirisEnum();
@@ -158,56 +150,28 @@ public class StoryReader
         return enums;
     }
 
-    private Dictionary<uint, Node> ReadNodes(OsiReader reader)
+    private static Dictionary<uint, Node> ReadNodes(OsiReader reader)
     {
-        var nodes = new Dictionary<uint, Node>();
-        var count = reader.ReadUInt32();
+        uint count = reader.ReadUInt32();
+        var nodes = new Dictionary<uint, Node>((int)count);
         while (count-- > 0)
         {
-            Node node = null;
-            var type = reader.ReadByte();
-            var nodeId = reader.ReadUInt32();
-            switch ((Node.Type)type)
+            byte type = reader.ReadByte();
+            uint nodeId = reader.ReadUInt32();
+
+            Node node = (Node.Type)type switch
             {
-                case Node.Type.Database:
-                    node = new DatabaseNode();
-                    break;
-
-                case Node.Type.Proc:
-                    node = new ProcNode();
-                    break;
-
-                case Node.Type.DivQuery:
-                    node = new DivQueryNode();
-                    break;
-
-                case Node.Type.InternalQuery:
-                    node = new InternalQueryNode();
-                    break;
-
-                case Node.Type.And:
-                    node = new AndNode();
-                    break;
-
-                case Node.Type.NotAnd:
-                    node = new NotAndNode();
-                    break;
-
-                case Node.Type.RelOp:
-                    node = new RelOpNode();
-                    break;
-
-                case Node.Type.Rule:
-                    node = new RuleNode();
-                    break;
-
-                case Node.Type.UserQuery:
-                    node = new UserQueryNode();
-                    break;
-
-                default:
-                    throw new NotImplementedException("No serializer found for this node type");
-            }
+                Node.Type.Database => new DatabaseNode(),
+                Node.Type.Proc => new ProcNode(),
+                Node.Type.DivQuery => new DivQueryNode(),
+                Node.Type.InternalQuery => new InternalQueryNode(),
+                Node.Type.And => new AndNode(),
+                Node.Type.NotAnd => new NotAndNode(),
+                Node.Type.RelOp => new RelOpNode(),
+                Node.Type.Rule => new RuleNode(),
+                Node.Type.UserQuery => new UserQueryNode(),
+                _ => throw new NotImplementedException($"No valid serializer architecture layout found for this specific node type index parameter: {type}")
+            };
 
             node.Read(reader);
             nodes.Add(nodeId, node);
@@ -216,10 +180,10 @@ public class StoryReader
         return nodes;
     }
 
-    private Dictionary<uint, Adapter> ReadAdapters(OsiReader reader)
+    private static Dictionary<uint, Adapter> ReadAdapters(OsiReader reader)
     {
-        var adapters = new Dictionary<uint, Adapter>();
-        var count = reader.ReadUInt32();
+        uint count = reader.ReadUInt32();
+        var adapters = new Dictionary<uint, Adapter>((int)count);
         while (count-- > 0)
         {
             var adapter = new Adapter();
@@ -230,10 +194,10 @@ public class StoryReader
         return adapters;
     }
 
-    private Dictionary<uint, Database> ReadDatabases(OsiReader reader)
+    private static Dictionary<uint, Database> ReadDatabases(OsiReader reader)
     {
-        var databases = new Dictionary<uint, Database>();
-        var count = reader.ReadUInt32();
+        uint count = reader.ReadUInt32();
+        var databases = new Dictionary<uint, Database>((int)count);
         while (count-- > 0)
         {
             var database = new Database();
@@ -244,10 +208,10 @@ public class StoryReader
         return databases;
     }
 
-    private Dictionary<uint, Goal> ReadGoals(OsiReader reader, Story story)
+    private static Dictionary<uint, Goal> ReadGoals(OsiReader reader, Story story)
     {
-        var goals = new Dictionary<uint, Goal>();
-        var count = reader.ReadUInt32();
+        uint count = reader.ReadUInt32();
+        var goals = new Dictionary<uint, Goal>((int)count);
         while (count-- > 0)
         {
             var goal = new Goal(story);
@@ -258,25 +222,25 @@ public class StoryReader
         return goals;
     }
 
-    private Dictionary<uint, OsirisType> ReadTypes(OsiReader reader, Story story)
+    private static Dictionary<uint, OsirisType> ReadTypes(OsiReader reader, Story _)
     {
         if (reader.Ver < OsiVersion.VerAddTypeMap)
         {
-            return new Dictionary<uint, OsirisType>();
+            return [];
         }
 
-        var types = ReadTypes(reader);
+        Dictionary<uint, OsirisType> types = ReadTypes(reader);
 
         // Find outermost types
-        foreach (var type in types)
+        foreach (KeyValuePair<uint, OsirisType> type in types)
         {
             if (type.Value.Alias != 0)
             {
-                var aliasId = type.Value.Alias;
+                uint aliasId = type.Value.Alias;
 
-                while (aliasId != 0 && types.ContainsKey(aliasId) && types[aliasId].Alias != 0)
+                while (aliasId != 0 && types.TryGetValue(aliasId, out OsirisType? aliasType) && aliasType.Alias != 0)
                 {
-                    aliasId = types[aliasId].Alias;
+                    aliasId = aliasType.Alias;
                 }
 
                 reader.TypeAliases.Add(type.Key, aliasId);
@@ -286,270 +250,292 @@ public class StoryReader
         return types;
     }
 
-    public Story Read(Stream stream)
+    public static Story Read(Stream stream)
     {
+        ArgumentNullException.ThrowIfNull(stream);
+
         var story = new Story();
-        using (var reader = new OsiReader(stream, story))
+        using var reader = new OsiReader(stream, story);
+        var header = new SaveFileHeader();
+        header.Read(reader);
+
+        reader.MinorVersion = header.MinorVersion;
+        reader.MajorVersion = header.MajorVersion;
+        story.MinorVersion = header.MinorVersion;
+        story.MajorVersion = header.MajorVersion;
+
+        if (reader.Ver > OsiVersion.VerLastSupported)
         {
-            var header = new SaveFileHeader();
-            header.Read(reader);
-            reader.MinorVersion = header.MinorVersion;
-            reader.MajorVersion = header.MajorVersion;
-            story.MinorVersion = header.MinorVersion;
-            story.MajorVersion = header.MajorVersion;
-
-            if (reader.Ver > OsiVersion.VerLastSupported)
-            {
-                var msg = String.Format(
-                    "Osiris version v{0}.{1} unsupported; this tool supports loading up to version 1.14.",
-                    reader.MajorVersion, reader.MinorVersion
-                );
-                throw new InvalidDataException(msg);
-            }
-
-            if (reader.Ver < OsiVersion.VerRemoveExternalStringTable)
-            {
-                reader.ShortTypeIds = false;
-            }
-            else if (reader.Ver >= OsiVersion.VerEnums)
-            {
-                reader.ShortTypeIds = true;
-            }
-
-            if (reader.Ver >= OsiVersion.VerScramble)
-                reader.Scramble = 0xAD;
-
-            story.Types = ReadTypes(reader, story);
-
-            if (reader.Ver >= OsiVersion.VerExternalStringTable && reader.Ver < OsiVersion.VerRemoveExternalStringTable)
-                story.ExternalStringTable = ReadStrings(reader);
-            else
-                story.ExternalStringTable = new List<string>();
-
-            story.Types[0] = OsirisType.MakeBuiltin(0, "UNKNOWN");
-            story.Types[1] = OsirisType.MakeBuiltin(1, "INTEGER");
-
-            if (reader.Ver >= OsiVersion.VerEnhancedTypes)
-            {
-                story.Types[2] = OsirisType.MakeBuiltin(2, "INTEGER64");
-                story.Types[3] = OsirisType.MakeBuiltin(3, "REAL");
-                story.Types[4] = OsirisType.MakeBuiltin(4, "STRING");
-                // BG3 defines GUIDSTRING in the .osi file
-                if (!story.Types.ContainsKey(5))
-                {
-                    story.Types[5] = OsirisType.MakeBuiltin(5, "GUIDSTRING");
-                }
-            }
-            else
-            {
-                story.Types[2] = OsirisType.MakeBuiltin(2, "FLOAT");
-                story.Types[3] = OsirisType.MakeBuiltin(3, "STRING");
-
-                // Populate custom type IDs for versions that had no type alias map
-                if (reader.Ver < OsiVersion.VerAddTypeMap)
-                {
-                    for (byte typeId = 4; typeId <= 17; typeId++)
-                    {
-                        story.Types[typeId] = OsirisType.MakeBuiltin(typeId, $"TYPE{typeId}");
-                        story.Types[typeId].Alias = 3;
-                        reader.TypeAliases.Add(typeId, 3);
-                    }
-                }
-            }
-
-            if (reader.Ver >= OsiVersion.VerEnums)
-            {
-                story.Enums = ReadEnums(reader);
-            }
-            else
-            {
-                story.Enums = new Dictionary<uint, OsirisEnum>();
-            }
-
-            story.DivObjects = reader.ReadList<OsirisDivObject>();
-            story.Functions = reader.ReadList<Function>();
-            story.Nodes = ReadNodes(reader);
-            story.Adapters = ReadAdapters(reader);
-            story.Databases = ReadDatabases(reader);
-            story.Goals = ReadGoals(reader, story);
-            story.GlobalActions = reader.ReadList<Call>();
-            story.ShortTypeIds = (bool)reader.ShortTypeIds;
-
-            story.FunctionSignatureMap = new Dictionary<string, Function>();
-            foreach (var func in story.Functions)
-            {
-                story.FunctionSignatureMap.Add(func.Name.Name + "/" + func.Name.Parameters.Types.Count.ToString(), func);
-            }
-
-            foreach (var node in story.Nodes)
-            {
-                node.Value.PostLoad(story);
-            }
-
-            return story;
+            throw new InvalidDataException($"Osiris version v{reader.MajorVersion}.{reader.MinorVersion} unsupported; this tool supports loading up to version 1.15.");
         }
+
+        if (reader.Ver < OsiVersion.VerRemoveExternalStringTable)
+        {
+            reader.ShortTypeIds = false;
+        }
+        else if (reader.Ver >= OsiVersion.VerEnums)
+        {
+            reader.ShortTypeIds = true;
+        }
+
+        if (reader.Ver >= OsiVersion.VerScramble)
+        {
+            reader.Scramble = 0xAD;
+        }
+
+        story.Types = ReadTypes(reader, story);
+
+        if (reader.Ver >= OsiVersion.VerExternalStringTable && reader.Ver < OsiVersion.VerRemoveExternalStringTable)
+        {
+            story.ExternalStringTable = ReadStrings(reader);
+        }
+        else
+        {
+            story.ExternalStringTable = [];
+        }
+
+        story.Types[0] = OsirisType.MakeBuiltin(0, "UNKNOWN");
+        story.Types[1] = OsirisType.MakeBuiltin(1, "INTEGER");
+
+        if (reader.Ver >= OsiVersion.VerEnhancedTypes)
+        {
+            story.Types[2] = OsirisType.MakeBuiltin(2, "INTEGER64");
+            story.Types[3] = OsirisType.MakeBuiltin(3, "REAL");
+            story.Types[4] = OsirisType.MakeBuiltin(4, "STRING");
+
+            if (!story.Types.ContainsKey(5))
+            {
+                story.Types[5] = OsirisType.MakeBuiltin(5, "GUIDSTRING");
+            }
+        }
+        else
+        {
+            story.Types[2] = OsirisType.MakeBuiltin(2, "FLOAT");
+            story.Types[3] = OsirisType.MakeBuiltin(3, "STRING");
+
+            if (reader.Ver < OsiVersion.VerAddTypeMap)
+            {
+                for (byte typeId = 4; typeId <= 17; typeId++)
+                {
+                    var builtinType = OsirisType.MakeBuiltin(typeId, $"TYPE{typeId}");
+                    builtinType.Alias = 3;
+                    story.Types[typeId] = builtinType;
+                    reader.TypeAliases.Add(typeId, 3);
+                }
+            }
+        }
+
+        if (reader.Ver >= OsiVersion.VerEnums)
+        {
+            story.Enums = ReadEnums(reader);
+        }
+        else
+        {
+            story.Enums = [];
+        }
+
+        story.DivObjects = reader.ReadList<OsirisDivObject>();
+        story.Functions = reader.ReadList<Function>();
+        story.Nodes = ReadNodes(reader);
+        story.Adapters = ReadAdapters(reader);
+        story.Databases = ReadDatabases(reader);
+        story.Goals = ReadGoals(reader, story);
+        story.GlobalActions = reader.ReadList<Call>();
+        story.ShortTypeIds = reader.ShortTypeIds ?? false;
+
+        story.FunctionSignatureMap = new Dictionary<string, Function>(story.Functions.Count, StringComparer.Ordinal);
+        foreach (Function func in story.Functions)
+        {
+            if (func?.Name?.Parameters?.Types is not null)
+            {
+                string sigKey = $"{func.Name.Name}/{func.Name.Parameters.Types.Count}";
+                story.FunctionSignatureMap.TryAdd(sigKey, func);
+            }
+        }
+
+        foreach (KeyValuePair<uint, Node> node in story.Nodes)
+        {
+            node.Value?.PostLoad(story);
+        }
+
+        return story;
     }
 }
 
-public class StoryWriter
+public sealed class StoryWriter(OsiWriter writer)
 {
-    private OsiWriter Writer;
+    private readonly OsiWriter _writer = writer ?? throw new ArgumentNullException(nameof(writer));
 
-    public StoryWriter()
+    private static void WriteStrings(OsiWriter writer, List<string> stringTable)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(stringTable);
 
-    }
-
-    private void WriteStrings(List<string> stringTable)
-    {
-        Writer.Write((UInt32)stringTable.Count);
-        foreach (var s in stringTable)
+        writer.Write((uint)stringTable.Count);
+        foreach (string s in stringTable)
         {
-            Writer.Write(s);
+            writer.Write(s);
         }
     }
 
-    private void WriteTypes(IList<OsirisType> types, Story story)
+    private static void WriteTypes(OsiWriter writer, List<OsirisType> types, Story story)
     {
-        Writer.Write((UInt32)types.Count);
-        foreach (var type in types)
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(types);
+        ArgumentNullException.ThrowIfNull(story);
+
+        writer.Write((uint)types.Count);
+        foreach (OsirisType type in types)
         {
-            type.Write(Writer);
-            if (type.Alias != 0)
+            if (type is not null)
             {
-                Writer.TypeAliases.Add(type.Index, story.FindBuiltinTypeId(type.Index));
-            }
-        }
-    }
-
-    private void WriteNodes(Dictionary<uint, Node> nodes)
-    {
-        Writer.Write((UInt32)nodes.Count);
-        foreach (var node in nodes)
-        {
-            Writer.Write((byte)node.Value.NodeType());
-            Writer.Write(node.Key);
-            node.Value.Write(Writer);
-        }
-    }
-
-    private void WriteAdapters(Dictionary<uint, Adapter> adapters)
-    {
-        Writer.Write((UInt32)adapters.Count);
-        foreach (var adapter in adapters)
-        {
-            Writer.Write(adapter.Key);
-            adapter.Value.Write(Writer);
-        }
-    }
-
-    private void WriteDatabases(Dictionary<uint, Database> databases)
-    {
-        Writer.Write((UInt32)databases.Count);
-        foreach (var database in databases)
-        {
-            Writer.Write(database.Key);
-            database.Value.Write(Writer);
-        }
-    }
-
-    private void WriteGoals(Dictionary<uint, Goal> goals)
-    {
-        Writer.Write((UInt32)goals.Count);
-        foreach (var goal in goals)
-        {
-            goal.Value.Write(Writer);
-        }
-    }
-
-    public void Write(Stream stream, Story story, bool leaveOpen)
-    {
-        using (Writer = new OsiWriter(stream, leaveOpen))
-        {
-            foreach (var node in story.Nodes)
-            {
-                node.Value.PreSave(story);
-            }
-
-            Writer.MajorVersion = story.MajorVersion;
-            Writer.MinorVersion = story.MinorVersion;
-            Writer.ShortTypeIds = story.ShortTypeIds;
-            Writer.Enums = story.Enums;
-
-            var header = new SaveFileHeader();
-            if (Writer.Ver >= OsiVersion.VerExternalStringTable)
-            {
-                if (Writer.ShortTypeIds)
+                type.Write(writer);
+                if (type.Alias != 0)
                 {
-                    header.Version = "Osiris save file dd. 07/09/22 00:20:54. Version 1.8.";
-                }
-                else
-                {
-                    header.Version = "Osiris save file dd. 03/30/17 07:28:20. Version 1.8.";
+                    writer.TypeAliases.TryAdd(type.Index, story.FindBuiltinTypeId(type.Index));
                 }
             }
-            else
+        }
+    }
+
+    private static void WriteNodes(OsiWriter writer, Dictionary<uint, Node> nodes)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(nodes);
+
+        writer.Write((uint)nodes.Count);
+        foreach (KeyValuePair<uint, Node> node in nodes)
+        {
+            if (node.Value is not null)
             {
-                header.Version = "Osiris save file dd. 02/10/15 12:44:13. Version 1.5.";
+                writer.Write((byte)node.Value.NodeType());
+                writer.Write(node.Key);
+                node.Value.Write(writer);
             }
-            header.MajorVersion = story.MajorVersion;
-            header.MinorVersion = story.MinorVersion;
-            header.BigEndian = false;
-            header.Unused = 0;
-            // Debug flags used in D:OS EE and D:OS 2
-            header.DebugFlags = 0x000C10A0;
-            header.Write(Writer);
+        }
+    }
 
-            if (Writer.Ver > OsiVersion.VerLastSupported)
+    private static void WriteAdapters(OsiWriter writer, Dictionary<uint, Adapter> adapters)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(adapters);
+
+        writer.Write((uint)adapters.Count);
+        foreach (KeyValuePair<uint, Adapter> adapter in adapters)
+        {
+            if (adapter.Value is not null)
             {
-                var msg = String.Format(
-                    "Osiris version v{0}.{1} unsupported; this tool supports saving up to version 1.11.",
-                    Writer.MajorVersion, Writer.MinorVersion
-                );
-                throw new InvalidDataException(msg);
+                writer.Write(adapter.Key);
+                adapter.Value.Write(writer);
             }
+        }
+    }
 
-            if (Writer.Ver >= OsiVersion.VerScramble)
-                Writer.Scramble = 0xAD;
+    private static void WriteDatabases(OsiWriter writer, Dictionary<uint, Database> databases)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(databases);
 
-            if (Writer.Ver >= OsiVersion.VerAddTypeMap)
+        writer.Write((uint)databases.Count);
+        foreach (KeyValuePair<uint, Database> database in databases)
+        {
+            if (database.Value is not null)
             {
-                List<OsirisType> types;
-                if (Writer.Ver >= OsiVersion.VerEnums)
-                {
-                    // BG3 Patch 9 writes all types to the blob except type 0
-                    types = story.Types.Values.Where(t => t.Name != "UNKNOWN").ToList();
-                }
-                else
-                {
-                    // Don't export builtin types, only externally declared ones
-                    types = story.Types.Values.Where(t => !t.IsBuiltin).ToList();
-                }
-
-                WriteTypes(types, story);
+                writer.Write(database.Key);
+                database.Value.Write(writer);
             }
+        }
+    }
 
-            if (Writer.Ver >= OsiVersion.VerEnums)
-            {
-                Writer.WriteList(story.Enums.Values.ToList());
-            }
+    private static void WriteGoals(OsiWriter writer, Dictionary<uint, Goal> goals)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(goals);
 
-            // TODO: regenerate string table?
-            if (Writer.Ver >= OsiVersion.VerExternalStringTable && Writer.Ver < OsiVersion.VerRemoveExternalStringTable)
-                WriteStrings(story.ExternalStringTable);
+        writer.Write((uint)goals.Count);
+        foreach (KeyValuePair<uint, Goal> goal in goals)
+        {
+            goal.Value?.Write(writer);
+        }
+    }
 
-            Writer.WriteList(story.DivObjects);
-            Writer.WriteList(story.Functions);
-            WriteNodes(story.Nodes);
-            WriteAdapters(story.Adapters);
-            WriteDatabases(story.Databases);
-            WriteGoals(story.Goals);
-            Writer.WriteList(story.GlobalActions);
+    public static void Write(Stream stream, Story story, bool leaveOpen)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(story);
 
-            foreach (var node in story.Nodes)
-            {
-                node.Value.PostSave(story);
-            }
+        using var localWriter = new OsiWriter(stream, leaveOpen)
+        {
+            MajorVersion = story.MajorVersion,
+            MinorVersion = story.MinorVersion,
+            ShortTypeIds = story.ShortTypeIds,
+            Enums = story.Enums
+        };
+
+        foreach (KeyValuePair<uint, Node> node in story.Nodes)
+        {
+            node.Value?.PreSave(story);
+        }
+
+        var header = new SaveFileHeader();
+        if (localWriter.Ver >= OsiVersion.VerExternalStringTable)
+        {
+            header.Version = localWriter.ShortTypeIds
+                ? "Osiris save file dd. 07/09/22 00:20:54. Version 1.8."
+                : "Osiris save file dd. 03/30/17 07:28:20. Version 1.8.";
+        }
+        else
+        {
+            header.Version = "Osiris save file dd. 02/10/15 12:44:13. Version 1.5.";
+        }
+
+        header.MajorVersion = story.MajorVersion;
+        header.MinorVersion = story.MinorVersion;
+        header.BigEndian = false;
+        header.Unused = 0;
+        header.DebugFlags = 0x000C10A0;
+        header.Write(localWriter);
+
+        if (localWriter.Ver > OsiVersion.VerLastSupported)
+        {
+            throw new InvalidDataException($"Osiris version v{localWriter.MajorVersion}.{localWriter.MinorVersion} unsupported; this tool supports saving up to version 1.15.");
+        }
+
+        if (localWriter.Ver >= OsiVersion.VerScramble)
+        {
+            localWriter.Scramble = 0xAD;
+        }
+
+        if (localWriter.Ver >= OsiVersion.VerAddTypeMap)
+        {
+            List<OsirisType> types = localWriter.Ver >= OsiVersion.VerEnums
+                ? [.. story.Types.Values.Where(t => t is not null && t.Name != "UNKNOWN")]
+                : [.. story.Types.Values.Where(t => t is not null && !t.IsBuiltin)];
+
+            WriteTypes(localWriter, types, story);
+        }
+
+        if (localWriter.Ver >= OsiVersion.VerEnums)
+        {
+            localWriter.WriteList([.. story.Enums.Values]);
+        }
+
+        if (localWriter.Ver >= OsiVersion.VerExternalStringTable && localWriter.Ver < OsiVersion.VerRemoveExternalStringTable)
+        {
+            WriteStrings(localWriter, story.ExternalStringTable);
+        }
+
+        localWriter.WriteList(story.DivObjects);
+        localWriter.WriteList(story.Functions);
+        WriteNodes(localWriter, story.Nodes);
+        WriteAdapters(localWriter, story.Adapters);
+        WriteDatabases(localWriter, story.Databases);
+        WriteGoals(localWriter, story.Goals);
+        localWriter.WriteList(story.GlobalActions);
+
+        foreach (KeyValuePair<uint, Node> node in story.Nodes)
+        {
+            node.Value?.PostSave(story);
         }
     }
 }

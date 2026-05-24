@@ -1,57 +1,81 @@
 ﻿using OpenTK.Mathematics;
-using System.Diagnostics;
 using LSLib.Granny.GR2;
 
 namespace LSLib.Granny.Model.CurveData;
 
-public class DaK8uC8u : AnimationCurveData
+public sealed class DaK8uC8u : AnimationCurveData
 {
-    [Serialization(Type = MemberType.Inline)]
-    public CurveDataHeader CurveDataHeader_DaK8uC8u;
-    public UInt16 OneOverKnotScaleTrunc;
-    [Serialization(Prototype = typeof(ControlReal32), Kind = SerializationKind.UserMember, Serializer = typeof(SingleListSerializer))]
-    public List<Single> ControlScaleOffsets;
-    [Serialization(Prototype = typeof(ControlUInt8), Kind = SerializationKind.UserMember, Serializer = typeof(UInt8ListSerializer))]
-    public List<Byte> KnotsControls;
+    [field: Serialization(Type = MemberType.Inline)]
+    public CurveDataHeader CurveDataHeader_DaK8uC8u { get; set; } = new();
 
-    public int Components()
-    {
-        return ControlScaleOffsets.Count / 2;
-    }
+    public ushort OneOverKnotScaleTrunc { get; set; }
 
+    [field: Serialization(Prototype = typeof(ControlReal32), Kind = SerializationKind.UserMember, Serializer = typeof(SingleListSerializer))]
+    public List<float> ControlScaleOffsets { get; set; } = [];
+
+    [field: Serialization(Prototype = typeof(ControlUInt8), Kind = SerializationKind.UserMember, Serializer = typeof(UInt8ListSerializer))]
+    public List<byte> KnotsControls { get; set; } = [];
+
+    public int Components() => ControlScaleOffsets.Count >> 1;
     public override int NumKnots()
     {
-        return KnotsControls.Count / (Components() + 1);
+        int comps = Components();
+        if (comps == -1) return 0;
+        return KnotsControls.Count / (comps + 1);
     }
 
     public override List<float> GetKnots()
     {
         var scale = ConvertOneOverKnotScaleTrunc(OneOverKnotScaleTrunc);
+        if (scale == 0f)
+        {
+            throw new ParsingException("Animation curve evaluation aborted: Knot timeline scale divisor resolves to zero.");
+        }
+
         var numKnots = NumKnots();
         var knots = new List<float>(numKnots);
+
         for (var i = 0; i < numKnots; i++)
-            knots.Add((float)KnotsControls[i] / scale);
+        {
+            knots.Add(KnotsControls[i] / scale);
+        }
 
         return knots;
     }
 
     public override List<Matrix3> GetMatrices()
     {
-        Debug.Assert(Components() == 9);
+        int comps = Components();
+        if (comps != 9)
+        {
+            throw new ParsingException($"Matrix transformation mapping aborted: Components mismatch (Expected 9, encountered {comps}).");
+        }
+
+        if (ControlScaleOffsets.Count < 18)
+        {
+            throw new ParsingException("Decompression aborted: ControlScaleOffsets array contains insufficient layout vectors.");
+        }
+
         var numKnots = NumKnots();
         var knots = new List<Matrix3>(numKnots);
+
+        ReadOnlySpan<float> scalesOffsets = CollectionsMarshal.AsSpan(ControlScaleOffsets);
+
         for (var i = 0; i < numKnots; i++)
         {
+            int baseIndex = numKnots + (i * 9);
+            if (baseIndex + 8 >= KnotsControls.Count) break;
+
             var mat = new Matrix3(
-                (float)KnotsControls[numKnots + i * 9 + 0] * ControlScaleOffsets[0] + ControlScaleOffsets[9 + 0],
-                (float)KnotsControls[numKnots + i * 9 + 1] * ControlScaleOffsets[1] + ControlScaleOffsets[9 + 1],
-                (float)KnotsControls[numKnots + i * 9 + 2] * ControlScaleOffsets[2] + ControlScaleOffsets[9 + 2],
-                (float)KnotsControls[numKnots + i * 9 + 3] * ControlScaleOffsets[3] + ControlScaleOffsets[9 + 3],
-                (float)KnotsControls[numKnots + i * 9 + 4] * ControlScaleOffsets[4] + ControlScaleOffsets[9 + 4],
-                (float)KnotsControls[numKnots + i * 9 + 5] * ControlScaleOffsets[5] + ControlScaleOffsets[9 + 5],
-                (float)KnotsControls[numKnots + i * 9 + 6] * ControlScaleOffsets[6] + ControlScaleOffsets[9 + 6],
-                (float)KnotsControls[numKnots + i * 9 + 7] * ControlScaleOffsets[7] + ControlScaleOffsets[9 + 7],
-                (float)KnotsControls[numKnots + i * 9 + 8] * ControlScaleOffsets[8] + ControlScaleOffsets[9 + 8]
+                KnotsControls[baseIndex + 0] * scalesOffsets[0] + scalesOffsets[9 + 0],
+                KnotsControls[baseIndex + 1] * scalesOffsets[1] + scalesOffsets[9 + 1],
+                KnotsControls[baseIndex + 2] * scalesOffsets[2] + scalesOffsets[9 + 2],
+                KnotsControls[baseIndex + 3] * scalesOffsets[3] + scalesOffsets[9 + 3],
+                KnotsControls[baseIndex + 4] * scalesOffsets[4] + scalesOffsets[9 + 4],
+                KnotsControls[baseIndex + 5] * scalesOffsets[5] + scalesOffsets[9 + 5],
+                KnotsControls[baseIndex + 6] * scalesOffsets[6] + scalesOffsets[9 + 6],
+                KnotsControls[baseIndex + 7] * scalesOffsets[7] + scalesOffsets[9 + 7],
+                KnotsControls[baseIndex + 8] * scalesOffsets[8] + scalesOffsets[9 + 8]
             );
             knots.Add(mat);
         }
@@ -61,16 +85,32 @@ public class DaK8uC8u : AnimationCurveData
 
     public override List<Quaternion> GetQuaternions()
     {
-        Debug.Assert(Components() == 4);
+        int comps = Components();
+        if (comps != 4)
+        {
+            throw new ParsingException($"Quaternion rotation mapping aborted: Components mismatch (Expected 4, encountered {comps}).");
+        }
+
+        if (ControlScaleOffsets.Count < 8)
+        {
+            throw new ParsingException("Decompression aborted: ControlScaleOffsets array contains insufficient layout vectors.");
+        }
+
         var numKnots = NumKnots();
         var quats = new List<Quaternion>(numKnots);
+
+        ReadOnlySpan<float> scalesOffsets = CollectionsMarshal.AsSpan(ControlScaleOffsets);
+
         for (var i = 0; i < numKnots; i++)
         {
+            int baseIndex = numKnots + (i * 4);
+            if (baseIndex + 3 >= KnotsControls.Count) break;
+
             var quat = new Quaternion(
-                (float)KnotsControls[numKnots + i * 4 + 0] * ControlScaleOffsets[0] + ControlScaleOffsets[4 + 0],
-                (float)KnotsControls[numKnots + i * 4 + 1] * ControlScaleOffsets[1] + ControlScaleOffsets[4 + 1],
-                (float)KnotsControls[numKnots + i * 4 + 2] * ControlScaleOffsets[2] + ControlScaleOffsets[4 + 2],
-                (float)KnotsControls[numKnots + i * 4 + 3] * ControlScaleOffsets[3] + ControlScaleOffsets[4 + 3]
+                KnotsControls[baseIndex + 0] * scalesOffsets[0] + scalesOffsets[4 + 0],
+                KnotsControls[baseIndex + 1] * scalesOffsets[1] + scalesOffsets[4 + 1],
+                KnotsControls[baseIndex + 2] * scalesOffsets[2] + scalesOffsets[4 + 2],
+                KnotsControls[baseIndex + 3] * scalesOffsets[3] + scalesOffsets[4 + 3]
             );
             quats.Add(quat);
         }

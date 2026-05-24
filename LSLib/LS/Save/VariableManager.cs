@@ -1,133 +1,135 @@
 ﻿using OpenTK.Mathematics;
+using System.Globalization;
+using System.Runtime.CompilerServices;
 
 namespace LSLib.LS.Save;
 
 public class OsirisVariableHelper
 {
-    private Int32 NumericStringId;
-    private Dictionary<string, Int32> IdentifierToKey = [];
-    private Dictionary<Int32, string> KeyToIdentifier = [];
+    private int _numericStringId;
+    private readonly Dictionary<string, int> _identifierToKey = new(StringComparer.Ordinal);
+    private readonly Dictionary<int, string> _keyToIdentifier = [];
 
     public void Load(Node helper)
     {
-        NumericStringId = (Int32)helper.Attributes["NumericStringId"].Value;
-
-        foreach (var mapping in helper.Children["IdentifierTable"])
+        ArgumentNullException.ThrowIfNull(helper);
+        if (helper.Attributes.TryGetValue("NumericStringId", out var idAttr) && idAttr?.Value is not null)
         {
-            string name = (string)mapping.Attributes["MapKey"].Value;
-            Int32 index = (Int32)mapping.Attributes["MapValue"].Value;
-            IdentifierToKey.Add(name, index);
-            KeyToIdentifier.Add(index, name);
+            _numericStringId = Convert.ToInt32(idAttr.Value, CultureInfo.InvariantCulture);
+        }
+        if (helper.Children.TryGetValue("IdentifierTable", out var mappingList))
+        {
+            foreach (var mapping in mappingList)
+            {
+                if (mapping?.Attributes.TryGetValue("MapKey", out var keyAttr) == true &&
+                    mapping.Attributes.TryGetValue("MapValue", out var valAttr) == true &&
+                    keyAttr?.Value is string name && valAttr?.Value is not null)
+                {
+                    int index = Convert.ToInt32(valAttr.Value, CultureInfo.InvariantCulture);
+                    _identifierToKey.TryAdd(name, index);
+                    _keyToIdentifier.TryAdd(index, name);
+                }
+            }
         }
     }
 
-    public Int32 GetKey(string variableName)
-    {
-        return IdentifierToKey[variableName];
-    }
+    public int GetKey(string variableName) => _identifierToKey[variableName];
 
-    public string GetName(Int32 variableIndex)
-    {
-        return KeyToIdentifier[variableIndex];
-    }
+    public string GetName(int variableIndex) => _keyToIdentifier[variableIndex];
+
 }
 
-abstract public class VariableHolder<TValue>
+public abstract class VariableHolder<TValue>
 {
-    protected List<TValue> Values = [];
-    private List<UInt16> Remaps = [];
-    
+    protected List<TValue> Values { get; set; } = [];
+    private readonly List<ushort> _remaps = [];
+
     public TValue GetRaw(int index)
     {
         if (index == 0)
         {
-            return default;
+            return default!;
         }
 
-        var valueSlot = Remaps[index - 1];
+        int valueSlot = _remaps[index - 1];
         return Values[valueSlot];
     }
 
     public void Load(Node variableList)
     {
+        ArgumentNullException.ThrowIfNull(variableList);
         LoadVariables(variableList);
 
-        var remaps = (byte[])variableList.Attributes["Remaps"].Value;
-
-        Remaps.Clear();
-        Remaps.Capacity = remaps.Length / 2;
-
-        using var ms = new MemoryStream(remaps);
-        using var reader = new BinaryReader(ms);
-        for (var i = 0; i < remaps.Length / 2; i++)
+        if (variableList.Attributes.TryGetValue("Remaps", out var remapAttr) && remapAttr?.Value is byte[] remaps)
         {
-            Remaps.Add(reader.ReadUInt16());
+            _remaps.Clear();
+            _remaps.Capacity = remaps.Length / 2;
+
+            using var ms = new MemoryStream(remaps);
+            using var reader = new BinaryReader(ms, Encoding.UTF8, leaveOpen: true);
+            int count = remaps.Length / 2;
+            for (int i = 0; i < count; i++)
+            {
+                _remaps.Add(reader.ReadUInt16());
+            }
         }
     }
 
-    abstract protected void LoadVariables(Node variableList);
+    protected abstract void LoadVariables(Node variableList);
 }
 
-public class IntVariableHolder : VariableHolder<Int32>
+public class IntVariableHolder : VariableHolder<int>
 {
-    public Int32? Get(int index)
+    public int? Get(int index)
     {
-        var raw = GetRaw(index);
-        if (raw == -1163005939) /* 0xbaadf00d */
-        {
-            return null;
-        }
-        else
-        {
-            return raw;
-        }
+        int raw = GetRaw(index);
+        return raw == -1163005939 ? null : raw; // 0xbaadf00d
     }
 
-    override protected void LoadVariables(Node variableList)
+    protected override void LoadVariables(Node variableList)
     {
-        var variables = (byte[])variableList.Attributes["Variables"].Value;
-        var numVars = variables.Length / 4;
-
-        Values.Clear();
-        Values.Capacity = numVars;
-
-        using var ms = new MemoryStream(variables);
-        using var reader = new BinaryReader(ms);
-        for (var i = 0; i < numVars; i++)
+        ArgumentNullException.ThrowIfNull(variableList);
+        if (variableList.Attributes.TryGetValue("Variables", out var varAttr) && varAttr?.Value is byte[] variables)
         {
-            Values.Add(reader.ReadInt32());
+            int numVars = variables.Length / 4;
+
+            Values.Clear();
+            Values.Capacity = numVars;
+
+            using var ms = new MemoryStream(variables);
+            using var reader = new BinaryReader(ms, Encoding.UTF8, leaveOpen: true);
+            for (int i = 0; i < numVars; i++)
+            {
+                Values.Add(reader.ReadInt32());
+            }
         }
     }
 }
 
-public class Int64VariableHolder : VariableHolder<Int64>
+public class Int64VariableHolder : VariableHolder<long>
 {
-    public Int64? Get(int index)
+    public long? Get(int index)
     {
-        var raw = GetRaw(index);
-        if (raw == -4995072469926809587) /* 0xbaadf00dbaadf00d */
-        {
-            return null;
-        }
-        else
-        {
-            return raw;
-        }
+        long raw = GetRaw(index);
+        return raw == -4995072469926809587L ? null : raw; // 0xbaadf00dbaadf00d     
     }
 
-    override protected void LoadVariables(Node variableList)
+    protected override void LoadVariables(Node variableList)
     {
-        var variables = (byte[])variableList.Attributes["Variables"].Value;
-        var numVars = variables.Length / 8;
-
-        Values.Clear();
-        Values.Capacity = numVars;
-
-        using var ms = new MemoryStream(variables);
-        using var reader = new BinaryReader(ms);
-        for (var i = 0; i < numVars; i++)
+        ArgumentNullException.ThrowIfNull(variableList);
+        if (variableList.Attributes.TryGetValue("Variables", out var varAttr) && varAttr?.Value is byte[] variables)
         {
-            Values.Add(reader.ReadInt64());
+            int numVars = variables.Length / 8;
+
+            Values.Clear();
+            Values.Capacity = numVars;
+
+            using var ms = new MemoryStream(variables);
+            using var reader = new BinaryReader(ms, Encoding.UTF8, leaveOpen: true);
+            for (int i = 0; i < numVars; i++)
+            {
+                Values.Add(reader.ReadInt64());
+            }
         }
     }
 }
@@ -136,67 +138,60 @@ public class FloatVariableHolder : VariableHolder<float>
 {
     public float? Get(int index)
     {
-        var raw = GetRaw(index);
-        var intFloat = BitConverter.ToUInt32(BitConverter.GetBytes(raw), 0);
-        if (intFloat == 0xbaadf00d)
-        {
-            return null;
-        }
-        else
-        {
-            return raw;
-        }
+        float raw = GetRaw(index);
+        uint intFloat = BitConverter.ToUInt32(BitConverter.GetBytes(raw), 0);
+        return intFloat == 0xbaadf00d ? null : raw;
     }
 
-    override protected void LoadVariables(Node variableList)
+    protected override void LoadVariables(Node variableList)
     {
-        var variables = (byte[])variableList.Attributes["Variables"].Value;
-        var numVars = variables.Length / 4;
+        ArgumentNullException.ThrowIfNull(variableList);
 
-        Values.Clear();
-        Values.Capacity = numVars;
-
-        using var ms = new MemoryStream(variables);
-        using var reader = new BinaryReader(ms);
-        for (var i = 0; i < numVars; i++)
+        if (variableList.Attributes.TryGetValue("Variables", out var varAttr) && varAttr?.Value is byte[] variables)
         {
-            Values.Add(reader.ReadSingle());
+            int numVars = variables.Length / 4;
+
+            Values.Clear();
+            Values.Capacity = numVars;
+
+            using var ms = new MemoryStream(variables);
+            using var reader = new BinaryReader(ms, Encoding.UTF8, leaveOpen: true);
+            for (int i = 0; i < numVars; i++)
+            {
+                Values.Add(reader.ReadSingle());
+            }
         }
     }
 }
 
 public class StringVariableHolder : VariableHolder<string>
 {
-    public string Get(int index)
+    public string? Get(int index)
     {
-        var raw = GetRaw(index);
-        if (raw == "0xbaadf00d")
-        {
-            return null;
-        }
-        else
-        {
-            return raw;
-        }
+        string raw = GetRaw(index);
+        return string.Equals(raw, "0xbaadf00d", StringComparison.OrdinalIgnoreCase) ? null : raw;
     }
 
-    override protected void LoadVariables(Node variableList)
+    protected override void LoadVariables(Node variableList)
     {
-        var variables = (byte[])variableList.Attributes["Variables"].Value;
+        ArgumentNullException.ThrowIfNull(variableList);
 
-        using var ms = new MemoryStream(variables);
-        using var reader = new BinaryReader(ms);
-        var numVars = reader.ReadInt32();
-
-        Values.Clear();
-        Values.Capacity = numVars;
-
-        for (var i = 0; i < numVars; i++)
+        if (variableList.Attributes.TryGetValue("Variables", out var varAttr) && varAttr?.Value is byte[] variables)
         {
-            var length = reader.ReadUInt16();
-            var bytes = reader.ReadBytes(length);
-            var str = Encoding.UTF8.GetString(bytes);
-            Values.Add(str);
+            using var ms = new MemoryStream(variables);
+            using var reader = new BinaryReader(ms, Encoding.UTF8, leaveOpen: true);
+            int numVars = reader.ReadInt32();
+
+            Values.Clear();
+            Values.Capacity = numVars;
+
+            for (int i = 0; i < numVars; i++)
+            {
+                ushort length = reader.ReadUInt16();
+                byte[] bytes = reader.ReadBytes(length);
+                string str = Encoding.UTF8.GetString(bytes);
+                Values.Add(str);
+            }
         }
     }
 }
@@ -206,35 +201,34 @@ public class Float3VariableHolder : VariableHolder<Vector3>
     public Vector3? Get(int index)
     {
         var raw = GetRaw(index);
-        var intFloat = BitConverter.ToUInt32(BitConverter.GetBytes(raw.X), 0);
-        if (intFloat == 0xbaadf00d)
-        {
-            return null;
-        }
-        else
-        {
-            return raw;
-        }
+
+        uint intFloat = Unsafe.As<float, uint>(ref raw.X);
+
+        return intFloat == 0xbaadf00d ? null : raw;
     }
 
-    override protected void LoadVariables(Node variableList)
+    protected override void LoadVariables(Node? variableList)
     {
-        var variables = (byte[])variableList.Attributes["Variables"].Value;
+        if (variableList?.Attributes is null) return;
+
+        if (!variableList.Attributes.TryGetValue("Variables", out var attribute) ||
+            attribute?.Value is not byte[] variables)
+        {
+            throw new InvalidDataException("The 'Variables' node parameter is missing or structurally invalid.");
+        }
+
         var numVars = variables.Length / 12;
 
         Values.Clear();
         Values.Capacity = numVars;
 
-        using var ms = new MemoryStream(variables);
-        using var reader = new BinaryReader(ms);
+        ReadOnlySpan<byte> span = variables;
+
         for (var i = 0; i < numVars; i++)
         {
-            Vector3 vec = new()
-            {
-                X = reader.ReadSingle(),
-                Y = reader.ReadSingle(),
-                Z = reader.ReadSingle()
-            };
+            ReadOnlySpan<byte> structSpan = span.Slice(i * 12, 12);
+
+            Vector3 vec = MemoryMarshal.Read<Vector3>(structSpan);
             Values.Add(vec);
         }
     }
@@ -259,51 +253,43 @@ internal struct Key2TableEntry
     /// <summary>
     /// Index of variable from OsirisVariableHelper.IdentifierTable
     /// </summary>
-    public UInt32 NameIndex;
+    public uint NameIndex;
     /// <summary>
     /// Index and type of value
     /// </summary>
-    public UInt32 ValueIndexAndType;
+    public uint ValueIndexAndType;
     /// <summary>
     /// Handle of the object that this variable is assigned to.
     /// </summary>
-    public UInt64 Handle;
-
+    public ulong Handle;
     /// <summary>
     /// Index of value in the appropriate variable list
     /// </summary>
-    public int ValueIndex
-    {
-        get { return (int)((ValueIndexAndType >> 3) & 0x3ff); }
-    }
-
+    public readonly int ValueIndex => (int)((ValueIndexAndType >> 3) & 0x3ff);
     /// <summary>
     /// Type of value
     /// </summary>
-    public VariableType ValueType
-    {
-        get { return (VariableType)(ValueIndexAndType & 7); }
-    }
+    public readonly VariableType ValueType => (VariableType)(ValueIndexAndType & 7);
 };
 
-public class VariableManager(OsirisVariableHelper variableHelper)
+public partial class VariableManager(OsirisVariableHelper variableHelper)
 {
-    private readonly Dictionary<int, Key2TableEntry> Keys = [];
-    private readonly IntVariableHolder IntList = new();
-    private readonly Int64VariableHolder Int64List = new();
-    private readonly FloatVariableHolder FloatList = new();
-    private readonly StringVariableHolder StringList = new();
-    private readonly StringVariableHolder FixedStringList = new();
-    private readonly Float3VariableHolder Float3List = new();
+    private readonly Dictionary<int, Key2TableEntry> _keys = [];
+    private readonly IntVariableHolder _intList = new();
+    private readonly Int64VariableHolder _int64List = new();
+    private readonly FloatVariableHolder _floatList = new();
+    private readonly StringVariableHolder _stringList = new();
+    private readonly StringVariableHolder _fixedStringList = new();
+    private readonly Float3VariableHolder _float3List = new();
 
-    public Dictionary<string, object> GetAll(bool includeDeleted = false)
+    public Dictionary<string, object?> GetAll(bool includeDeleted = false)
     {
-        var variables = new Dictionary<string, object>();
-        foreach (var key in Keys.Values)
+        var variables = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var key in _keys.Values)
         {
-            var name = variableHelper.GetName((int)key.NameIndex);
-            var value = includeDeleted ? GetRaw(key.ValueType, key.ValueIndex) : Get(key.ValueType, key.ValueIndex);
-            if (value != null)
+            string name = variableHelper.GetName((int)key.NameIndex);
+            object? value = includeDeleted ? GetRaw(key.ValueType, key.ValueIndex) : Get(key.ValueType, key.ValueIndex);
+            if (value is not null)
             {
                 variables.Add(name, value);
             }
@@ -312,31 +298,32 @@ public class VariableManager(OsirisVariableHelper variableHelper)
         return variables;
     }
 
-    public object Get(string name)
+    public object? Get(string name)
     {
-        var index = variableHelper.GetKey(name);
-        var key = Keys[index];
+        int index = variableHelper.GetKey(name);
+        var key = _keys[index];
         return Get(key.ValueType, key.ValueIndex);
     }
 
-    private object Get(VariableType type, int index)
+    private object? Get(VariableType type, int index)
     {
         return type switch
         {
-            VariableType.Int => IntList.Get(index),
-            VariableType.Int64 => Int64List.Get(index),
-            VariableType.Float => FloatList.Get(index),
-            VariableType.String => StringList.Get(index),
-            VariableType.FixedString => FixedStringList.Get(index),
-            VariableType.Float3 => Float3List.Get(index),
-            _ => throw new ArgumentException("Unsupported variable type"),
+            VariableType.Int => _intList.Get(index),
+            VariableType.Int64 => _int64List.Get(index),
+            VariableType.Float => _floatList.Get(index),
+            VariableType.String => _stringList.Get(index),
+            VariableType.FixedString => _fixedStringList.Get(index),
+            VariableType.Float3 => _float3List.Get(index),
+            _ => throw new ArgumentException("Unsupported variable type mapping specification criteria context.")
         };
     }
 
-    public object GetRaw(string name)
+    public object? GetRaw(string name)
     {
-        var index = variableHelper.GetKey(name);
-        var key = Keys[index];
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        int index = variableHelper.GetKey(name);
+        var key = _keys[index];
         return GetRaw(key.ValueType, key.ValueIndex);
     }
 
@@ -344,67 +331,71 @@ public class VariableManager(OsirisVariableHelper variableHelper)
     {
         return type switch
         {
-            VariableType.Int => IntList.GetRaw(index),
-            VariableType.Int64 => Int64List.GetRaw(index),
-            VariableType.Float => FloatList.GetRaw(index),
-            VariableType.String => StringList.GetRaw(index),
-            VariableType.FixedString => FixedStringList.GetRaw(index),
-            VariableType.Float3 => Float3List.GetRaw(index),
-            _ => throw new ArgumentException("Unsupported variable type"),
+            VariableType.Int => _intList.GetRaw(index),
+            VariableType.Int64 => _int64List.GetRaw(index),
+            VariableType.Float => _floatList.GetRaw(index),
+            VariableType.String => _stringList.GetRaw(index),
+            VariableType.FixedString => _fixedStringList.GetRaw(index),
+            VariableType.Float3 => _float3List.GetRaw(index),
+            _ => throw new ArgumentException("Unsupported variable type mapping specification criteria context.")
         };
     }
 
     private void LoadKeys(byte[] handleList)
     {
-        Keys.Clear();
+        _keys.Clear();
 
         using var ms = new MemoryStream(handleList);
-        using var reader = new BinaryReader(ms);
-        var numHandles = reader.ReadInt32();
-        for (var i = 0; i < numHandles; i++)
+        using var reader = new BinaryReader(ms, Encoding.UTF8, leaveOpen: true);
+        int numHandles = reader.ReadInt32();
+        for (int i = 0; i < numHandles; i++)
         {
             var entry = BinUtils.ReadStruct<Key2TableEntry>(reader);
-            Keys.Add((int)entry.NameIndex, entry);
+            _keys.TryAdd((int)entry.NameIndex, entry);
         }
     }
 
     public void Load(Node variableManager)
     {
-        List<Node> nodes;
-        if (variableManager.Children.TryGetValue("IntList", out nodes))
+        ArgumentNullException.ThrowIfNull(variableManager);
+
+        if (variableManager.Children.TryGetValue("IntList", out var nodes) && nodes.Count > 0)
         {
-            IntList.Load(nodes[0]);
+            _intList.Load(nodes[0]);
         }
 
-        if (variableManager.Children.TryGetValue("Int64List", out nodes))
+        if (variableManager.Children.TryGetValue("Int64List", out nodes) && nodes.Count > 0)
         {
-            Int64List.Load(nodes[0]);
+            _int64List.Load(nodes[0]);
         }
 
-        if (variableManager.Children.TryGetValue("FloatList", out nodes))
+        if (variableManager.Children.TryGetValue("FloatList", out nodes) && nodes.Count > 0)
         {
-            FloatList.Load(nodes[0]);
+            _floatList.Load(nodes[0]);
         }
 
-        if (variableManager.Children.TryGetValue("StringList", out nodes))
+        if (variableManager.Children.TryGetValue("StringList", out nodes) && nodes.Count > 0)
         {
-            StringList.Load(nodes[0]);
+            _stringList.Load(nodes[0]);
         }
 
-        if (variableManager.Children.TryGetValue("FixedStringList", out nodes))
+        if (variableManager.Children.TryGetValue("FixedStringList", out nodes) && nodes.Count > 0)
         {
-            FixedStringList.Load(nodes[0]);
+            _fixedStringList.Load(nodes[0]);
         }
 
-        if (variableManager.Children.TryGetValue("Float3List", out nodes))
+        if (variableManager.Children.TryGetValue("Float3List", out nodes) && nodes.Count > 0)
         {
-            Float3List.Load(nodes[0]);
+            _float3List.Load(nodes[0]);
         }
 
-        if (variableManager.Children.TryGetValue("Key2TableList", out nodes))
+        if (variableManager.Children.TryGetValue("Key2TableList", out nodes) && nodes.Count > 0)
         {
-            var handleList = (byte[])nodes[0].Attributes["HandleList"].Value;
-            LoadKeys(handleList);
+            var headNode = nodes[0];
+            if (headNode.Attributes.TryGetValue("HandleList", out var handleAttr) && handleAttr?.Value is byte[] handleList)
+            {
+                LoadKeys(handleList);
+            }
         }
     }
 }

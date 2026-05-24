@@ -1,14 +1,18 @@
-﻿using LSLib.LS.Story.Compiler;
+﻿using System;
+using System.Collections.Generic;
+using LSLib.LS.Story.Compiler;
 
 namespace LSLib.LS.Story.HeaderParser;
 
 /// <summary>
 /// Base class for all AST nodes.
 /// (This doesn't do anything meaningful, it is needed only to 
-/// provide the GPPG parser a semantic value base class.)
+/// provide the parser a semantic value base class.)
 /// </summary>
 public class ASTNode
 {
+    // Fix: Added backing property tracking line telemetry or literal token context cleanly for Superpower rules integration
+    public string Literal { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -17,11 +21,13 @@ public class ASTNode
 public class ASTDeclarations : ASTNode
 {
     // Debug options
-    public List<String> Options = new List<String>();
+    public List<string> Options { get; set; } = [];
+
     // Declared type aliases
-    public List<ASTAlias> Aliases = new List<ASTAlias>();
+    public List<ASTAlias> Aliases { get; set; } = [];
+
     // Declared functions
-    public List<ASTFunction> Functions = new List<ASTFunction>();
+    public List<ASTFunction> Functions { get; set; } = [];
 }
 
 /// <summary>
@@ -31,7 +37,8 @@ public class ASTDeclarations : ASTNode
 public class ASTFunctionTypeNode : ASTNode
 {
     // Type of function (SysQuery, SysCall, Event, etc.)
-    public Compiler.FunctionType Type;
+    // Fix: Fully qualified the exact global namespace route to completely bypass local class naming ambiguities
+    public LSLib.LS.Story.Compiler.FunctionType Type { get; set; }
 }
 
 /// <summary>
@@ -40,10 +47,10 @@ public class ASTFunctionTypeNode : ASTNode
 /// </summary>
 public class ASTFunctionMetadata : ASTNode
 {
-    public UInt32 Meta1;
-    public UInt32 Meta2;
-    public UInt32 Meta3;
-    public UInt32 Meta4;
+    public uint Meta1 { get; set; }
+    public uint Meta2 { get; set; }
+    public uint Meta3 { get; set; }
+    public uint Meta4 { get; set; }
 }
 
 /// <summary>
@@ -52,16 +59,19 @@ public class ASTFunctionMetadata : ASTNode
 public class ASTFunction : ASTNode
 {
     // Type of function (SysQuery, SysCall, Event, etc.)
-    public Compiler.FunctionType Type;
+    public LSLib.LS.Story.Compiler.FunctionType Type { get; set; }
+
     // Name of the function
-    public String Name;
+    public string Name { get; set; } = string.Empty;
+
     // Function parameters
-    public List<ASTFunctionParam> Params;
+    public List<ASTFunctionParam> Params { get; set; } = [];
+
     // Function metadata for Osiris internal use - mostly unknown.
-    public UInt32 Meta1;
-    public UInt32 Meta2;
-    public UInt32 Meta3;
-    public UInt32 Meta4;
+    public uint Meta1 { get; set; }
+    public uint Meta2 { get; set; }
+    public uint Meta3 { get; set; }
+    public uint Meta4 { get; set; }
 }
 
 /// <summary>
@@ -71,7 +81,7 @@ public class ASTFunction : ASTNode
 public class ASTFunctionParamList : ASTNode
 {
     // Function parameters
-    public List<ASTFunctionParam> Params = new List<ASTFunctionParam>();
+    public List<ASTFunctionParam> Params { get; set; } = [];
 }
 
 /// <summary>
@@ -80,12 +90,14 @@ public class ASTFunctionParamList : ASTNode
 public class ASTFunctionParam : ASTNode
 {
     // Parameter name
-    public String Name;
+    public string Name { get; set; } = string.Empty;
+
     // Parameter type
-    public String Type;
+    public string Type { get; set; } = string.Empty;
+
     // Parameter direction (IN/OUT)
     // This is only meaningful for Query and SysQuery, for all other types direction is always "IN".
-    public ParamDirection Direction;
+    public ParamDirection Direction { get; set; }
 }
 
 /// <summary>
@@ -94,11 +106,13 @@ public class ASTFunctionParam : ASTNode
 public class ASTAlias : ASTNode
 {
     // Name of the new type
-    public String TypeName;
+    public string TypeName { get; set; } = string.Empty;
+
     // ID of the new type (must be a new type ID)
-    public uint TypeId;
+    public uint TypeId { get; set; }
+
     // ID of the type this type is mapped to (must be an existing type ID)
-    public uint AliasId;
+    public uint AliasId { get; set; }
 }
 
 /// <summary>
@@ -108,7 +122,7 @@ public class ASTAlias : ASTNode
 public class ASTOption : ASTNode
 {
     // Name of debug option
-    public String Name;
+    public string Name { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -117,5 +131,4 @@ public class ASTOption : ASTNode
 /// </summary>
 public class ASTLiteral : ASTNode
 {
-    public String Literal;
 }

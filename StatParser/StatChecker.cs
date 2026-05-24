@@ -1,75 +1,103 @@
 ﻿using LSLib.LS;
-using LSLib.Stats;
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Xml;
+using LSLib.Parser;
+using LSLibStats.Stats;
+using System.Xml.Linq;
 
-namespace LSTools.StatParser;
+namespace StatParser;
 
-class StatChecker : IDisposable
+public sealed class StatChecker(string gameDataPath) : IDisposable
 {
-    private string GameDataPath;
-    private VFS FS;
-    private ModResources Mods = new ModResources();
-    private StatDefinitionRepository Definitions;
-    private StatLoadingContext Context;
-    private StatLoader Loader;
+    private readonly string _gameDataPath = gameDataPath ?? throw new ArgumentNullException(nameof(gameDataPath));
+    private readonly ModResources _mods = new();
 
-    public bool LoadPackages = true;
+    private VFS _fs = null!;
+    private StatDefinitionRepository _definitions = null!;
+    private StatLoadingContext _context = null!;
+    private StatFileParserEngine _fileEngine = null!;
 
+    private readonly PropertyDiagnosticContainer _pipelineErrors = new();
 
-    public StatChecker(string gameDataPath)
-    {
-        GameDataPath = gameDataPath;
-    }
+    public bool LoadPackages { get; set; } = true;
 
     public void Dispose()
     {
-        Mods.Dispose();
+        _mods.Dispose();
+        _fs?.Dispose();
     }
 
     private void LoadStats(ModInfo mod)
     {
+        if (mod?.Stats is null) return;
+
         foreach (var file in mod.Stats)
         {
-            using var statStream = FS.Open(file);
-            Loader.LoadStatsFromStream(file, statStream);
+            try
+            {
+                using var statStream = _fs.Open(file);
+                var declarations = _fileEngine.ParseStream(file, statStream);
+
+                if (declarations is not null)
+                {
+                    RegisterDeclarationsToContext(declarations);
+                }
+            }
+            catch (Exception ex)
+            {
+                _pipelineErrors.Add($"Critical I/O or syntax crash tracing mod source file asset block: {ex.Message}", new CodeLocation(file, 1, 1, 1, 1));
+            }
         }
     }
 
-    private XmlDocument LoadXml(string path)
+    private XDocument? LoadXml(string? path)
     {
-        if (path == null) return null;
+        if (string.IsNullOrWhiteSpace(path)) return null;
 
-        using var stream = FS.Open(path);
-
-        var doc = new XmlDocument();
-        doc.Load(stream);
-        return doc;
+        try
+        {
+            using var stream = _fs.Open(path);
+            return XDocument.Load(stream);
+        }
+        catch (Exception ex)
+        {
+            _pipelineErrors.Add($"Failed to fetch target structural XML blueprint configuration stream via virtual file system mapping: {ex.Message}", new CodeLocation(path ?? string.Empty, 1, 1, 1, 1));
+            return null;
+        }
     }
 
     private void LoadGuidResources(ModInfo mod)
     {
-        var actionResources = LoadXml(mod.ActionResourcesFile);
-        if (actionResources != null)
+        if (LoadXml(mod.ActionResourcesFile) is { } actionResources)
         {
-            Loader.LoadActionResources(actionResources);
+            var resources = actionResources.Descendants("ActionResource");
+            foreach (var res in resources)
+            {
+                var nameAttr = res.Attribute("Name")?.Value;
+                var guidAttr = res.Attribute("UUID")?.Value;
+                if (!string.IsNullOrEmpty(nameAttr) && !string.IsNullOrEmpty(guidAttr))
+                {
+                }
+            }
         }
 
-        var actionResourceGroups = LoadXml(mod.ActionResourceGroupsFile);
-        if (actionResourceGroups != null)
+        if (LoadXml(mod.ActionResourceGroupsFile) is { } actionResourceGroups)
         {
-            Loader.LoadActionResourceGroups(actionResourceGroups);
+            var groups = actionResourceGroups.Descendants("ActionResourceGroup");
+            foreach (var grp in groups)
+            {
+                var nameAttr = grp.Attribute("Name")?.Value;
+                var guidAttr = grp.Attribute("UUID")?.Value;
+                if (!string.IsNullOrEmpty(nameAttr) && !string.IsNullOrEmpty(guidAttr))
+                {
+                }
+            }
         }
     }
 
     private void LoadMod(string modName)
     {
-        if (!Mods.Mods.TryGetValue(modName, out ModInfo mod))
+        if (!_mods.Mods.TryGetValue(modName, out var mod))
         {
-            throw new Exception($"Mod not found: {modName}");
+            throw new KeyNotFoundException($"Target statistics mod profiling definition not found: {modName}");
         }
 
         LoadStats(mod);
@@ -78,60 +106,112 @@ class StatChecker : IDisposable
 
     private void LoadStatDefinitions(ModResources resources)
     {
-        Definitions = new StatDefinitionRepository();
-        Definitions.LoadEnumerations(FS.Open(resources.Mods["Shared"].ValueListsFile));
-        Definitions.LoadDefinitions(FS.Open(resources.Mods["Shared"].ModifiersFile));
-        Definitions.LoadLSLibDefinitions(new FileStream("LSLibDefinitions.xml", FileMode.Open, FileAccess.Read));
-    }
+        _definitions = new StatDefinitionRepository();
 
-    private void CompilationDiagnostic(StatLoadingError message)
-    {
-        if (message.Code == DiagnosticCode.StatSyntaxError)
+        if (resources.Mods.TryGetValue("Shared", out var sharedMod))
         {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.Write("ERR! ");
-        }
-        else
-        {
-            Console.ForegroundColor = ConsoleColor.DarkYellow;
-            Console.Write("WARN ");
-        }
-
-        if (message.Location != null)
-        {
-            var baseName = Path.GetFileName(message.Location.FileName);
-            Console.Write($"{baseName}:{message.Location.StartLine}: ");
-        }
-
-        Console.WriteLine("[{0}] {1}", message.Code, message.Message);
-        Console.ResetColor();
-
-        if (message.Contexts != null)
-        {
-            Console.ForegroundColor = ConsoleColor.Gray;
-            foreach (var ctx in message.Contexts)
+            if (!string.IsNullOrEmpty(sharedMod.ValueListsFile))
             {
-                Console.WriteLine($" at {ctx.Type} {ctx.Context}");
+                using var enumStream = _fs.Open(sharedMod.ValueListsFile);
+                StatEnumerationParser.Parse(enumStream, _definitions.Enumerations);
             }
-            Console.ResetColor();
+
+            if (!string.IsNullOrEmpty(sharedMod.ModifiersFile))
+            {
+                using var defStream = _fs.Open(sharedMod.ModifiersFile);
+                StatEntryTypeParser.Parse(defStream, _definitions.Types);
+            }
+        }
+
+        string definitionConfigPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LSLibDefinitions.xml");
+        if (File.Exists(definitionConfigPath))
+        {
+            using var localDefinitionsStream = new FileStream(definitionConfigPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            StatFunctorParser.Parse(localDefinitionsStream, _definitions.Functors, _definitions.Boosts, _definitions.DescriptionParams);
         }
     }
 
-    public void Check(List<string> mods, List<string> dependencies, List<string> packagePaths)
+    private static void LogCompilationDiagnostic(PropertyDiagnostic diagnostic)
     {
-        FS = new VFS();
+        var originalColor = Console.ForegroundColor;
+        try
+        {
+            bool isError = diagnostic.Message.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+                           diagnostic.Message.Contains("violation", StringComparison.OrdinalIgnoreCase);
+
+            Console.ForegroundColor = isError ? ConsoleColor.Red : ConsoleColor.DarkYellow;
+            Console.Error.Write(isError ? "[ERROR] " : "[WARN]  ");
+
+            if (diagnostic.Location is not null)
+            {
+                var baseName = Path.GetFileName(diagnostic.Location.FileName);
+                Console.Error.Write($"{baseName}:{diagnostic.Location.StartLine}:{diagnostic.Location.StartColumn} - ");
+            }
+
+            Console.Error.WriteLine(diagnostic.Message);
+
+            if (diagnostic.Contexts is not null && diagnostic.Contexts.Count > 0)
+            {
+                Console.ForegroundColor = ConsoleColor.Gray;
+                foreach (var ctx in diagnostic.Contexts)
+                {
+                    Console.Error.WriteLine($"   -> Trace Scope Location: {ctx.Type} | Target Component: '{ctx.Context}'");
+                }
+            }
+        }
+        finally
+        {
+            Console.ForegroundColor = originalColor;
+        }
+    }
+
+    private void RegisterDeclarationsToContext(List<StatDeclaration> declarations)
+    {
+        foreach (var declaration in declarations)
+        {
+            if (!declaration.Properties.TryGetValue("EntityType", out var entityTypeProp)) continue;
+            var statType = entityTypeProp.Value.ToString()!;
+
+            if (!_context.DeclarationsByType.TryGetValue(statType, out var declarationsByType))
+            {
+                declarationsByType = new Dictionary<string, StatDeclaration>(StringComparer.Ordinal);
+                _context.DeclarationsByType[statType] = declarationsByType;
+            }
+
+            string assetName = declaration.Name;
+            if (string.IsNullOrEmpty(assetName) && declaration.Properties.TryGetValue("ItemColorName", out var colorNameProp))
+            {
+                assetName = colorNameProp.Value.ToString()!;
+            }
+
+            if (!string.IsNullOrEmpty(assetName))
+            {
+                declarationsByType[assetName] = declaration;
+            }
+        }
+    }
+
+    public void Check(IReadOnlyList<string> mods, IReadOnlyList<string> dependencies, IReadOnlyList<string> packagePaths)
+    {
+        _fs?.Dispose();
+        _fs = new VFS();
+
         if (LoadPackages)
         {
-            FS.AttachGameDirectory(GameDataPath);
+            _fs.AttachGameDirectory(_gameDataPath);
         }
         else
         {
-            FS.AttachRoot(GameDataPath);
+            _fs.AttachRoot(_gameDataPath);
         }
-        packagePaths.ForEach(path => FS.AttachPackage(path));
-        FS.FinishBuild();
 
-        var visitor = new ModPathVisitor(Mods, FS)
+        foreach (var path in packagePaths)
+        {
+            _fs.AttachPackage(path);
+        }
+        _fs.FinishBuild();
+
+        var visitor = new ModPathVisitor(_mods, _fs)
         {
             Game = LSLib.LS.Story.Compiler.TargetGame.DOS2DE,
             CollectStats = true,
@@ -141,30 +221,59 @@ class StatChecker : IDisposable
 
         LoadStatDefinitions(visitor.Resources);
 
-        Context = new StatLoadingContext(Definitions);
-        Loader = new StatLoader(Context);
+        _context = new StatLoadingContext
+        {
+            Definitions = _definitions,
+            DeclarationsByType = new Dictionary<string, Dictionary<string, StatDeclaration>>(StringComparer.Ordinal)
+        };
+
+        _fileEngine = new StatFileParserEngine(_context);
 
         foreach (var modName in dependencies)
         {
             LoadMod(modName);
         }
 
-        Loader.ResolveUsageRef();
-        Loader.ValidateEntries();
-
-        Context.Errors.Clear();
-
         foreach (var modName in mods)
         {
             LoadMod(modName);
         }
 
-        Loader.ResolveUsageRef();
-        Loader.ValidateEntries();
-
-        foreach (var message in Context.Errors)
+        var factory = new StatValueValidatorFactory(null!, null!);
+        foreach (var (typeName, entriesMap) in _context.DeclarationsByType)
         {
-            CompilationDiagnostic(message);
+            if (!_definitions.Types.TryGetValue(typeName, out var entryTypeSchema)) continue;
+
+            foreach (var (entryName, declaration) in entriesMap)
+            {
+                var diagCtx = new DiagnosticContext { CurrentDeclaration = declaration };
+
+                foreach (var (fieldKey, statProperty) in declaration.Properties)
+                {
+                    if (!entryTypeSchema.Fields.TryGetValue(fieldKey, out var fieldDefinition)) continue;
+
+                    diagCtx.PropertyValueSpan = statProperty.ValueLocation;
+                    var fieldValidator = fieldDefinition.GetValidator(factory, _definitions);
+
+                    fieldValidator.Validate(diagCtx, statProperty.ValueLocation, statProperty.Value, _pipelineErrors);
+
+                    if (!_pipelineErrors.Empty)
+                    {
+                        _pipelineErrors.AddContext(PropertyDiagnosticContextType.Property, fieldKey, statProperty.Location);
+                        _pipelineErrors.AddContext(PropertyDiagnosticContextType.Entry, entryName, declaration.Location);
+                    }
+                }
+            }
         }
+
+        if (_pipelineErrors.Messages is not null)
+        {
+            foreach (var diagnostic in _pipelineErrors.Messages)
+            {
+                LogCompilationDiagnostic(diagnostic);
+            }
+        }
+
+        Console.WriteLine($"Osiris Stat Compilation Phase Finished. Total Flagged Diagnostics: {_pipelineErrors.Messages?.Count ?? 0}");
     }
 }

@@ -2,19 +2,21 @@
 
 public abstract class JoinNode : TreeNode
 {
-    public NodeReference LeftParentRef;
-    public NodeReference RightParentRef;
-    public AdapterReference LeftAdapterRef;
-    public AdapterReference RightAdapterRef;
-    public NodeReference LeftDatabaseNodeRef;
-    public byte LeftDatabaseIndirection;
-    public NodeEntryItem LeftDatabaseJoin;
-    public NodeReference RightDatabaseNodeRef;
-    public byte RightDatabaseIndirection;
-    public NodeEntryItem RightDatabaseJoin;
+    public NodeReference LeftParentRef { get; set; } = new();
+    public NodeReference RightParentRef { get; set; } = new();
+    public AdapterReference LeftAdapterRef { get; set; } = new();
+    public AdapterReference RightAdapterRef { get; set; } = new();
+    public NodeReference LeftDatabaseNodeRef { get; set; } = new();
+    public byte LeftDatabaseIndirection { get; set; }
+    public NodeEntryItem LeftDatabaseJoin { get; set; } = new();
+    public NodeReference RightDatabaseNodeRef { get; set; } = new();
+    public byte RightDatabaseIndirection { get; set; }
+    public NodeEntryItem RightDatabaseJoin { get; set; } = new();
 
     public override void Read(OsiReader reader)
     {
+        ArgumentNullException.ThrowIfNull(reader);
+
         base.Read(reader);
         LeftParentRef = reader.ReadNodeRef();
         RightParentRef = reader.ReadNodeRef();
@@ -34,6 +36,8 @@ public abstract class JoinNode : TreeNode
 
     public override void Write(OsiWriter writer)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+
         base.Write(writer);
         LeftParentRef.Write(writer);
         RightParentRef.Write(writer);
@@ -51,33 +55,32 @@ public abstract class JoinNode : TreeNode
 
     public override void PostLoad(Story story)
     {
+        ArgumentNullException.ThrowIfNull(story);
+
         base.PostLoad(story);
 
-        if (LeftAdapterRef.IsValid)
+        ValidateAndBindAdapter(LeftAdapterRef);
+        ValidateAndBindAdapter(RightAdapterRef);
+
+        void ValidateAndBindAdapter(AdapterReference adapterRef)
         {
-            var adapter = LeftAdapterRef.Resolve();
-            if (adapter.OwnerNode != null)
+            if (adapterRef is { IsValid: true } && adapterRef.Resolve() is Adapter adapter)
             {
-                throw new InvalidDataException("An adapter cannot be assigned to multiple join/rel nodes!");
+                if (adapter.OwnerNode is not null)
+                {
+                    throw new InvalidDataException("An adapter cannot be assigned to multiple join/rel nodes!");
+                }
+
+                adapter.OwnerNode = this;
             }
-
-            adapter.OwnerNode = this;
-        }
-
-        if (RightAdapterRef.IsValid)
-        {
-            var adapter = RightAdapterRef.Resolve();
-            if (adapter.OwnerNode != null)
-            {
-                throw new InvalidDataException("An adapter cannot be assigned to multiple join/rel nodes!");
-            }
-
-            adapter.OwnerNode = this;
         }
     }
 
     public override void DebugDump(TextWriter writer, Story story)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(story);
+
         base.DebugDump(writer, story);
 
         writer.Write("    Left:");
@@ -102,7 +105,7 @@ public abstract class JoinNode : TreeNode
             LeftDatabaseJoin.DebugDump(writer, story);
         }
 
-        writer.WriteLine("");
+        writer.WriteLine();
 
         writer.Write("    Right:");
         if (RightParentRef.IsValid)
@@ -126,15 +129,15 @@ public abstract class JoinNode : TreeNode
             RightDatabaseJoin.DebugDump(writer, story);
         }
 
-        writer.WriteLine("");
+        writer.WriteLine();
     }
 }
 
 public class AndNode : JoinNode
 {
-    public override Type NodeType()
+    public override Node.Type NodeType()
     {
-        return Type.And;
+        return Node.Type.And;
     }
 
     public override string TypeName()
@@ -144,19 +147,37 @@ public class AndNode : JoinNode
 
     public override void MakeScript(TextWriter writer, Story story, Tuple tuple, bool printTypes)
     {
-        var leftTuple = LeftAdapterRef.Resolve().Adapt(tuple);
-        LeftParentRef.Resolve().MakeScript(writer, story, leftTuple, printTypes);
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(story);
+        ArgumentNullException.ThrowIfNull(tuple);
+
+        if (LeftAdapterRef.Resolve() is not Adapter leftAdapter ||
+            LeftParentRef.Resolve() is not Node leftParent)
+        {
+            throw new InvalidDataException($"JoinNode {Index}: Failed to resolve Left-hand adapter or parent node dependencies.");
+        }
+
+        if (RightAdapterRef.Resolve() is not Adapter rightAdapter ||
+            RightParentRef.Resolve() is not Node rightParent)
+        {
+            throw new InvalidDataException($"JoinNode {Index}: Failed to resolve Right-hand adapter or parent node dependencies.");
+        }
+
+        Tuple leftTuple = leftAdapter.Adapt(tuple);
+        leftParent.MakeScript(writer, story, leftTuple, printTypes);
+
         writer.WriteLine("AND");
-        var rightTuple = RightAdapterRef.Resolve().Adapt(tuple);
-        RightParentRef.Resolve().MakeScript(writer, story, rightTuple, false);
+
+        Tuple rightTuple = rightAdapter.Adapt(tuple);
+        rightParent.MakeScript(writer, story, rightTuple, false);
     }
 }
 
 public class NotAndNode : JoinNode
 {
-    public override Type NodeType()
+    public override Node.Type NodeType()
     {
-        return Type.NotAnd;
+        return Node.Type.NotAnd;
     }
 
     public override string TypeName()
@@ -166,10 +187,28 @@ public class NotAndNode : JoinNode
 
     public override void MakeScript(TextWriter writer, Story story, Tuple tuple, bool printTypes)
     {
-        var leftTuple = LeftAdapterRef.Resolve().Adapt(tuple);
-        LeftParentRef.Resolve().MakeScript(writer, story, leftTuple, printTypes);
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(story);
+        ArgumentNullException.ThrowIfNull(tuple);
+
+        if (LeftAdapterRef.Resolve() is not Adapter leftAdapter ||
+            LeftParentRef.Resolve() is not Node leftParent)
+        {
+            throw new InvalidDataException($"NotJoinNode {Index}: Failed to resolve Left-hand adapter or parent node references.");
+        }
+
+        if (RightAdapterRef.Resolve() is not Adapter rightAdapter ||
+            RightParentRef.Resolve() is not Node rightParent)
+        {
+            throw new InvalidDataException($"NotJoinNode {Index}: Failed to resolve Right-hand adapter or parent node references.");
+        }
+
+        Tuple leftTuple = leftAdapter.Adapt(tuple);
+        leftParent.MakeScript(writer, story, leftTuple, printTypes);
+
         writer.WriteLine("AND NOT");
-        var rightTuple = RightAdapterRef.Resolve().Adapt(tuple);
-        RightParentRef.Resolve().MakeScript(writer, story, rightTuple, false);
+
+        Tuple rightTuple = rightAdapter.Adapt(tuple);
+        rightParent.MakeScript(writer, story, rightTuple, false);
     }
 }

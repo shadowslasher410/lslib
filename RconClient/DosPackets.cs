@@ -1,19 +1,17 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+﻿using System.Text;
 
-namespace LSLib.Rcon.DosPackets;
+namespace LSLib.Rcon;
 
 public enum DosPacketId : byte
 {
     DosUnknown87 = 0x87,
-    DosEnumerationList = 0x8B,
+    DosSendConsoleCommand = 0x88,
     DosDisconnectConsole = 0x89,
     DosConsoleResponse = 0x8A,
-    DosSendConsoleCommand = 0x8B
+    DosEnumerationList = 0x8B
 };
 
-public class DosUnknown87 : Packet
+public class DosUnknown87 : IPacket
 {
     public void Read(BinaryReaderBE Reader)
     {
@@ -27,137 +25,147 @@ public class DosUnknown87 : Packet
 
 public class DosEnumeration
 {
-    public String Name;
-    public Byte Type;
-    public List<String> Values;
+    public string Name { get; set; } = string.Empty;
+    public byte Type { get; set; }
+    public List<string> Values { get; set; } = [];
 }
 
-public class DosEnumerationList : Packet
+public class DosEnumerationList : IPacket
 {
-    public List<DosEnumeration> Enumerations;
+    public List<DosEnumeration> Enumerations { get; set; } = [];
 
-    private static String ReadString(BinaryReaderBE Reader)
+    private static string ReadString(BinaryReaderBE reader)
     {
-        var length = Reader.ReadInt32();
-        var strBytes = Reader.ReadBytes(length);
+        int length = reader.ReadInt32();
+        if (length <= 0) return string.Empty;
+
+        ReadOnlySpan<byte> strBytes = reader.ReadBytes(length);
         return Encoding.UTF8.GetString(strBytes);
     }
 
-    public void Read(BinaryReaderBE Reader)
+    public void Read(BinaryReaderBE reader)
     {
-        Enumerations = new List<DosEnumeration>();
-        var numEnums = Reader.ReadUInt32();
+        uint numEnums = reader.ReadUInt32();
+        Enumerations = new List<DosEnumeration>((int)numEnums);
         for (var i = 0; i < numEnums; i++)
         {
-            var enumeration = new DosEnumeration();
-            enumeration.Name = ReadString(Reader);
-            enumeration.Type = Reader.ReadByte();
-            enumeration.Values = new List<String>();
+            var enumeration = new DosEnumeration
+            {
+                Name = ReadString(reader),
+                Type = reader.ReadByte(),
+            };
 
-            var numElems = Reader.ReadUInt32();
+            var numElems = reader.ReadUInt32();
+            enumeration.Values = new List<string>((int)numElems);
+
             for (var j = 0; j < numElems; j++)
             {
-                enumeration.Values.Add(ReadString(Reader));
+                enumeration.Values.Add(ReadString(reader));
             }
 
             Enumerations.Add(enumeration);
         }
     }
 
-    public void Write(BinaryWriterBE Writer)
+    public void Write(BinaryWriterBE writer)
     {
         throw new NotImplementedException();
     }
 }
 
-public class DosDisconnectConsole : Packet
+public class DosDisconnectConsole : IPacket
 {
-    public void Read(BinaryReaderBE Reader)
+    public void Read(BinaryReaderBE reader)
     {
         throw new NotImplementedException();
     }
 
-    public void Write(BinaryWriterBE Writer)
+    public void Write(BinaryWriterBE writer)
     {
-        Writer.Write((Byte)DosPacketId.DosDisconnectConsole);
-        byte[] pkt = new byte[]
-        {
+        writer.Write((Byte)DosPacketId.DosDisconnectConsole);
+        byte[] pkt =
+        [
             0x00, 0x00, 0x00, 0x60,
             0x00, 0x08, 0x0A, 0x00,
             0x00, 0x09, 0x00, 0x00,
             0x00, 0x15
-        };
-        Writer.Write(pkt);
+        ];
+        writer.Write(pkt);
     }
 }
 
-public class DosSendConsoleCommand : Packet
+public class DosSendConsoleCommand : IPacket
 {
-    public String Command;
-    public String[] Arguments;
+    public string Command { get; set; } = string.Empty;
+    public string[] Arguments { get; set; } = [];
 
-    public void Read(BinaryReaderBE Reader)
+    public void Read(BinaryReaderBE reader)
     {
         throw new NotImplementedException();
     }
 
-    public void Write(BinaryWriterBE Writer)
+    public void Write(BinaryWriterBE writer)
     {
-        Writer.Write((Byte)DosPacketId.DosSendConsoleCommand);
-        Writer.Write((UInt32)1);
-        byte[] cmd = Encoding.UTF8.GetBytes(Command);
-        Writer.Write((UInt32)cmd.Length);
-        Writer.Write(cmd);
-        Writer.Write((Byte)0);
+        writer.Write((byte)DosPacketId.DosSendConsoleCommand);
+        writer.Write((uint)1);
 
-        if (Arguments == null)
+        byte[] cmd = Encoding.UTF8.GetBytes(Command);
+        writer.Write((uint)cmd.Length);
+        writer.Write(cmd);
+        writer.Write((byte)0);
+
+        if (Arguments is null || Arguments.Length == 0)
         {
-            Writer.Write((UInt32)0);
+            writer.Write((uint)0);
         }
         else
         {
-            Writer.Write((UInt32)Arguments.Length);
-            for (var i = 0; i < Arguments.Length; i++)
+            writer.Write((uint)Arguments.Length);
+            foreach (string t in Arguments)
             {
-                byte[] arg = Encoding.UTF8.GetBytes(Arguments[i]);
-                Writer.Write((UInt32)arg.Length);
-                Writer.Write(arg);
-                Writer.Write((Byte)0);
+                byte[] arg = Encoding.UTF8.GetBytes(t);
+                writer.Write((uint)arg.Length);
+                writer.Write(arg);
+                writer.Write((byte)0);
             }
         }
 
-        Writer.Write((UInt16)0);
+        writer.Write((ushort)0);
     }
 }
 
-public class DosConsoleResponse : Packet
+public class DosConsoleResponse : IPacket
 {
     public class ConsoleLine
     {
-        public String Line;
-        public UInt32 Level;
-    };
+        public string Line { get; set; } = string.Empty;
+        public uint Level { get; set; }
+    }
 
-    public ConsoleLine[] Lines;
+    public ConsoleLine[] Lines { get; set; } = [];
 
-    public void Read(BinaryReaderBE Reader)
+    public void Read(BinaryReaderBE reader)
     {
-        var lines = Reader.ReadUInt32();
-        Lines = new ConsoleLine[lines];
-        for (var i = 0; i < lines; i++)
+        uint linesCount = reader.ReadUInt32();
+        Lines = new ConsoleLine[linesCount];
+
+        for (int i = 0; i < linesCount; i++)
         {
-            var consoleLine = new ConsoleLine();
-            var length = Reader.ReadUInt32();
-            var unknown = Reader.ReadByte();
-            var length2 = Reader.ReadUInt32();
-            var line = Reader.ReadBytes((int)length);
-            consoleLine.Level = Reader.ReadUInt32();
-            consoleLine.Line = Encoding.UTF8.GetString(line);
-            Lines[i] = consoleLine;
+            uint length = reader.ReadUInt32();
+            _ = reader.ReadByte();
+            _ = reader.ReadUInt32();
+
+            ReadOnlySpan<byte> lineBytes = reader.ReadBytes((int)length);
+
+            Lines[i] = new ConsoleLine
+            {
+                Level = reader.ReadUInt32(),
+                Line = Encoding.UTF8.GetString(lineBytes)
+            };
         }
     }
 
-    public void Write(BinaryWriterBE Writer)
+    public void Write(BinaryWriterBE writer)
     {
         throw new NotImplementedException();
     }

@@ -1,26 +1,35 @@
-﻿using Newtonsoft.Json;
+﻿using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace LSLib.LS;
 
-public class LSJWriter(Stream stream)
+[JsonSerializable(typeof(Resource))]
+internal partial class LSJWriterJsonContext : JsonSerializerContext
 {
-    private readonly Stream stream = stream;
-    public bool PrettyPrint = false;
-    public NodeSerializationSettings SerializationSettings = new();
+}
+
+public sealed class LSJWriter(Stream stream)
+{
+    private readonly Stream _stream = stream ?? throw new ArgumentNullException(nameof(stream));
+
+    public bool PrettyPrint { get; set; } = false;
+    public NodeSerializationSettings SerializationSettings { get; set; } = new();
 
     public void Write(Resource rsrc)
     {
-        var settings = new JsonSerializerSettings
-        {
-            Formatting = Formatting.Indented
-        };
-        settings.Converters.Add(new LSJResourceConverter(SerializationSettings));
-        var serializer = JsonSerializer.Create(settings);
+        ArgumentNullException.ThrowIfNull(rsrc);
 
-        using var streamWriter = new StreamWriter(stream);
-        using var writer = new JsonTextWriter(streamWriter);
-        writer.IndentChar = '\t';
-        writer.Indentation = 1;
-        serializer.Serialize(writer, rsrc);
+        var options = new JsonSerializerOptions
+        {
+            WriteIndented = PrettyPrint,
+            IndentCharacter = '\t',
+            IndentSize = 1
+        };
+
+        options.Converters.Add(new LSJResourceConverter(SerializationSettings));
+
+        var context = new LSJWriterJsonContext(options);
+
+        JsonSerializer.Serialize(_stream, rsrc, context.Resource);
     }
 }

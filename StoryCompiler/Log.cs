@@ -1,220 +1,185 @@
 ﻿using LSLib.LS.Story.Compiler;
-using Newtonsoft.Json;
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace LSTools.StoryCompiler;
 
-public interface Logger
+public interface ILogger
 {
     void CompilationStarted();
     void CompilationFinished(bool succeeded);
-
     void TaskStarted(string name);
     void TaskFinished();
-
     void CompilationDiagnostic(Diagnostic message);
 }
 
-public class ConsoleLogger : Logger
+public class ConsoleLogger : ILogger
 {
-    private Stopwatch compilationTimer = new Stopwatch();
-    private Stopwatch taskTimer = new Stopwatch();
+    private readonly Stopwatch _compilationTimer = new();
+    private readonly Stopwatch _taskTimer = new();
 
-    public void CompilationStarted()
-    {
-        compilationTimer.Restart();
-    }
+    public void CompilationStarted() => _compilationTimer.Restart();
 
     public void CompilationFinished(bool succeeded)
     {
-        compilationTimer.Stop();
-        Console.WriteLine("Compilation took: {0} ms", compilationTimer.Elapsed.Seconds * 1000 + compilationTimer.Elapsed.Milliseconds);
+        _compilationTimer.Stop();
+        Console.WriteLine("Compilation took: {0} ms", _compilationTimer.ElapsedMilliseconds);
     }
 
     public void TaskStarted(string name)
     {
-        Console.Write(name + " ... ");
-        taskTimer.Restart();
+        Console.Write($"{name} ... ");
+        _taskTimer.Restart();
     }
 
     public void TaskFinished()
     {
-        taskTimer.Stop();
-        Console.WriteLine("{0} ms", taskTimer.Elapsed.Seconds * 1000 + taskTimer.Elapsed.Milliseconds);
+        _taskTimer.Stop();
+        Console.WriteLine("{0} ms", _taskTimer.ElapsedMilliseconds);
     }
 
     public void CompilationDiagnostic(Diagnostic message)
     {
-        switch (message.Level)
+        var originalColor = Console.ForegroundColor;
+
+        Console.ForegroundColor = message.Level switch
         {
-            case MessageLevel.Error:
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.Write("ERR! ");
-                break;
+            MessageLevel.Error => ConsoleColor.Red,
+            MessageLevel.Warning => ConsoleColor.DarkYellow,
+            _ => originalColor
+        };
 
-            case MessageLevel.Warning:
-                Console.ForegroundColor = ConsoleColor.DarkYellow;
-                Console.Write("WARN ");
-                break;
-        }
+        Console.Write(message.Level switch
+        {
+            MessageLevel.Error => "ERR! ",
+            MessageLevel.Warning => "WARN ",
+            _ => ""
+        });
 
-        if (message.Location != null)
+        if (message.Location is not null)
         {
             Console.Write($"{message.Location.FileName}:{message.Location.StartLine}:{message.Location.StartColumn}: ");
         }
 
         Console.WriteLine("[{0}] {1}", message.Code, message.Message);
-        Console.ResetColor();
+        Console.ForegroundColor = originalColor;
     }
 }
 
-public class JsonLogConverter : JsonConverter
+[JsonSourceGenerationOptions(
+    WriteIndented = false,
+    Converters = [typeof(JsonLoggerOutputConverter), typeof(DiagnosticConverter)]
+)]
+[JsonSerializable(typeof(JsonLoggerOutput))]
+[JsonSerializable(typeof(Diagnostic))]
+internal partial class StoryCompilerJsonContext : JsonSerializerContext { }
+
+public class DiagnosticConverter : JsonConverter<Diagnostic>
 {
-    public override bool CanConvert(Type objectType)
-    {
-        return
-            objectType.Equals(typeof(JsonLoggerOutput))
-            || objectType.Equals(typeof(Diagnostic));
-    }
-    
-    public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
-    {
+    public override Diagnostic Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
         throw new NotImplementedException();
-    }
 
-    public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
+    public override void Write(Utf8JsonWriter writer, Diagnostic value, JsonSerializerOptions options)
     {
-        if (value is JsonLoggerOutput)
+        writer.WriteStartObject();
+
+        if (value.Location is not null)
         {
-            var output = value as JsonLoggerOutput;
-            writer.WriteStartObject();
-
-            writer.WritePropertyName("successful");
-            writer.WriteValue(output.Succeeded);
-
-            writer.WritePropertyName("stats");
-            writer.WriteStartObject();
-            foreach (var time in output.StepTimes)
-            {
-                writer.WritePropertyName(time.Key);
-                writer.WriteValue(time.Value);
-            }
-            writer.WriteEndObject();
-
-            writer.WritePropertyName("messages");
-            writer.WriteStartArray();
-            foreach (var diagnostic in output.Diagnostics)
-            {
-                serializer.Serialize(writer, diagnostic);
-            }
-            writer.WriteEndArray();
-
-            writer.WriteEndObject();
-        }
-        else if (value is Diagnostic)
-        {
-            var diagnostic = value as Diagnostic;
-            writer.WriteStartObject();
-
             writer.WritePropertyName("location");
-            if (diagnostic.Location != null)
-            {
-                writer.WriteStartObject();
-
-                writer.WritePropertyName("file");
-                writer.WriteValue(diagnostic.Location.FileName);
-
-                writer.WritePropertyName("StartLine");
-                writer.WriteValue(diagnostic.Location.StartLine);
-
-                writer.WritePropertyName("StartColumn");
-                writer.WriteValue(diagnostic.Location.StartColumn);
-
-                writer.WritePropertyName("EndLine");
-                writer.WriteValue(diagnostic.Location.EndLine);
-
-                writer.WritePropertyName("EndColumn");
-                writer.WriteValue(diagnostic.Location.EndColumn);
-
-                writer.WriteEndObject();
-            }
-            else
-            {
-                writer.WriteNull();
-            }
-
-            writer.WritePropertyName("code");
-            writer.WriteValue(diagnostic.Code);
-
-            writer.WritePropertyName("level");
-            writer.WriteValue(diagnostic.Level);
-
-            writer.WritePropertyName("message");
-            writer.WriteValue(diagnostic.Message);
-
+            writer.WriteStartObject();
+            writer.WriteString("file", value.Location.FileName);
+            writer.WriteNumber("StartLine", value.Location.StartLine);
+            writer.WriteNumber("StartColumn", value.Location.StartColumn);
+            writer.WriteNumber("EndLine", value.Location.EndLine);
+            writer.WriteNumber("EndColumn", value.Location.EndColumn);
             writer.WriteEndObject();
         }
         else
         {
-            throw new InvalidOperationException();
+            writer.WriteNull("location");
         }
+
+        writer.WriteString("code", value.Code);
+        writer.WriteString("level", value.Level.ToString());
+        writer.WriteString("message", value.Message);
+
+        writer.WriteEndObject();
     }
 }
 
-class JsonLoggerOutput
+public class JsonLoggerOutputConverter : JsonConverter<JsonLoggerOutput>
 {
-    public Dictionary<string, int> StepTimes = new Dictionary<string, int>();
-    public List<Diagnostic> Diagnostics = new List<Diagnostic>();
-    public bool Succeeded;
-}
+    public override JsonLoggerOutput Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        throw new NotImplementedException();
 
-class JsonLogger : Logger
-{
-    private Stopwatch TaskTimer = new Stopwatch();
-    private JsonLoggerOutput Output = new JsonLoggerOutput();
-    private String CurrentStep;
-
-    public void CompilationStarted()
+    public override void Write(Utf8JsonWriter writer, JsonLoggerOutput value, JsonSerializerOptions options)
     {
+        writer.WriteStartObject();
+        writer.WriteBoolean("successful", value.Succeeded);
+
+        writer.WritePropertyName("stats");
+        writer.WriteStartObject();
+        foreach (var (step, time) in value.StepTimes)
+        {
+            writer.WriteNumber(step, time);
+        }
+        writer.WriteEndObject();
+
+        writer.WritePropertyName("messages");
+        writer.WriteStartArray();
+        foreach (var diagnostic in value.Diagnostics)
+        {
+            var diagnosticTypeInfo = StoryCompilerJsonContext.Default.Diagnostic;
+            JsonSerializer.Serialize(writer, diagnostic, diagnosticTypeInfo);
+        }
+        writer.WriteEndArray();
+
+        writer.WriteEndObject();
     }
+}
+
+public class JsonLoggerOutput
+{
+    public Dictionary<string, int> StepTimes { get; init; } = [];
+    public List<Diagnostic> Diagnostics { get; init; } = [];
+    public bool Succeeded { get; set; }
+}
+
+public class JsonLogger : ILogger
+{
+    private readonly Stopwatch _taskTimer = new();
+    private readonly JsonLoggerOutput _output = new();
+    private string CurrentStep { get; set; } = string.Empty;
+
+    public void CompilationStarted() { }
 
     public void CompilationFinished(bool succeeded)
     {
-        Output.Succeeded = succeeded;
-        var serializer = new JsonSerializer();
-        serializer.Converters.Add(new JsonLogConverter());
+        _output.Succeeded = succeeded;
 
-        using (var memory = new MemoryStream())
+        using var memoryStream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(memoryStream))
         {
-            using (var stream = new StreamWriter(memory))
-            using (JsonWriter writer = new JsonTextWriter(stream))
-            {
-                serializer.Serialize(writer, Output);
-            }
-
-            var json = Encoding.UTF8.GetString(memory.ToArray());
-            Console.Write(json);
+            var outputTypeInfo = StoryCompilerJsonContext.Default.JsonLoggerOutput;
+            JsonSerializer.Serialize(writer, _output, outputTypeInfo);
         }
+
+        Console.Write(Encoding.UTF8.GetString(memoryStream.ToArray()));
     }
 
     public void TaskStarted(string name)
     {
         CurrentStep = name;
-        TaskTimer.Restart();
+        _taskTimer.Restart();
     }
 
     public void TaskFinished()
     {
-        TaskTimer.Stop();
-        Output.StepTimes.Add(CurrentStep, TaskTimer.Elapsed.Seconds * 60 + TaskTimer.Elapsed.Milliseconds);
+        _taskTimer.Stop();
+        _output.StepTimes.Add(CurrentStep, (int)_taskTimer.ElapsedMilliseconds);
     }
 
-    public void CompilationDiagnostic(Diagnostic message)
-    {
-        Output.Diagnostics.Add(message);
-    }
+    public void CompilationDiagnostic(Diagnostic message) => _output.Diagnostics.Add(message);
 }

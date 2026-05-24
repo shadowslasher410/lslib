@@ -1,89 +1,73 @@
 ﻿using LSLib.Parser;
-using LSLib.Stats;
-using LSLib.Stats.Functors;
-using QUT.Gppg;
-using System.Text;
+using System.Collections.Frozen;
 
-namespace LSLib.Stats.Functors;
+namespace LSLibStats.Stats.Functor;
 
-public partial class FunctorScanner
+public enum ExpressionType
 {
-    public LexLocation LastLocation()
-    {
-        return new LexLocation(tokLin, tokCol, tokELin, tokECol);
-    }
-
-    public int TokenStartPos()
-    {
-        return tokPos;
-    }
-
-    public int TokenEndPos()
-    {
-        return tokEPos;
-    }
-
-    private object MakeLiteral(string s) => s;
+    Boost = 0,
+    Functor = 1,
+    DescriptionParams = 2
 }
 
-public abstract class FunctorScanBase : AbstractScanner<object, LexLocation>
+public static partial class FunctorParserExtensions
 {
-    protected virtual bool yywrap() { return true; }
+    public static string MakeLiteral(string value) => value ?? string.Empty;
+
+    public static string UnwrapNode(object node) => node?.ToString() ?? string.Empty;
 }
 
-public class FunctorActionValidator
+public sealed class FunctorAction
 {
-    private readonly StatDefinitionRepository Definitions;
-    private readonly DiagnosticContext Context;
-    private readonly StatValueValidatorFactory ValidatorFactory;
-    private readonly ExpressionType ExprType;
+    public string Action { get; set; } = string.Empty;
+    public List<string> Arguments { get; init; } = [];
+    public int StartPos { get; set; }
+    public int EndPos { get; set; }
+}
 
-    public FunctorActionValidator(StatDefinitionRepository definitions, DiagnosticContext ctx, StatValueValidatorFactory validatorFactory, ExpressionType type)
-    {
-        Definitions = definitions;
-        Context = ctx;
-        ValidatorFactory = validatorFactory;
-        ExprType = type;
-    }
+public sealed class Functor
+{
+    public string? TextKey { get; set; }
+    public string? Context { get; set; }
+    public object? Condition { get; set; }
+    public FunctorAction? Action { get; set; }
+}
 
-    public void Validate(FunctorAction action, PropertyDiagnosticContainer errors)
+public sealed class FunctorActionValidator(StatDefinitionRepository definitions, DiagnosticContext ctx, StatValueValidatorFactory validatorFactory, ExpressionType type)
+{
+    private readonly StatDefinitionRepository _definitions = definitions ?? throw new ArgumentNullException(nameof(definitions));
+    private readonly DiagnosticContext _ctx = ctx ?? throw new ArgumentNullException(nameof(ctx));
+    private readonly StatValueValidatorFactory _validatorFactory = validatorFactory ?? throw new ArgumentNullException(nameof(validatorFactory));
+    private readonly ExpressionType _exprType = type;
+
+    private static readonly FrozenSet<string> StripContexts = FrozenSet.ToFrozenSet(
+        ["SELF", "OWNER", "SWAP", "OBSERVER_OBSERVER", "OBSERVER_TARGET", "OBSERVER_SOURCE"],
+        StringComparer.Ordinal
+    );
+
+    public void Validate(FunctorAction action, PropertyDiagnosticContainer errors, CodeLocation? baseLocation)
     {
-        var functors = (ExprType) switch
+        var functors = _exprType switch
         {
-            ExpressionType.Boost => Definitions.Boosts,
-            ExpressionType.Functor => Definitions.Functors,
-            ExpressionType.DescriptionParams => Definitions.DescriptionParams,
-            _ => throw new NotImplementedException("Cannot validate expressions of this type")
+            ExpressionType.Boost => _definitions.Boosts,
+            ExpressionType.Functor => _definitions.Functors,
+            ExpressionType.DescriptionParams => _definitions.DescriptionParams,
+            _ => throw new NotImplementedException("Cannot validate expressions of this type category.")
         };
 
-        if (!functors.TryGetValue(action.Action, out StatFunctorType? functor))
+        if (!functors.TryGetValue(action.Action, out var functor))
         {
-            if (ExprType != ExpressionType.DescriptionParams)
+            if (_exprType != ExpressionType.DescriptionParams)
             {
-                errors.Add($"'{action.Action}' is not a valid {ExprType}");
+                errors.Add($"'{action.Action}' is not a valid {_exprType}");
             }
-
             return;
         }
 
-        // Strip property contexts
         var firstArg = 0;
-        while (firstArg < action.Arguments.Count)
+        while (firstArg < action.Arguments.Count && StripContexts.Contains(action.Arguments[firstArg]))
         {
-            var arg = action.Arguments[firstArg];
-            if (arg == "SELF" 
-                || arg == "OWNER" 
-                || arg == "SWAP" 
-                || arg == "OBSERVER_OBSERVER" 
-                || arg == "OBSERVER_TARGET"
-                || arg == "OBSERVER_SOURCE")
-            {
-                firstArg++;
-            }
-            else
-            {
-                break;
-            }
+            firstArg++;
         }
 
         var args = action.Arguments.GetRange(firstArg, action.Arguments.Count - firstArg);
@@ -104,9 +88,9 @@ public class FunctorActionValidator
             var arg = functor.Args[i];
             if (arg.Type.Length > 0)
             {
-                var validator = ValidatorFactory.CreateValidator(arg.Type, null, null, Definitions);
-                // FIXME pass codelocation
-                validator.Validate(Context, null, args[i], argErrors);
+                var validator = _validatorFactory.CreateValidator(arg.Type, null, null, _definitions);
+                validator.Validate(_ctx, baseLocation, args[i], argErrors);
+
                 if (!argErrors.Empty)
                 {
                     argErrors.AddContext(PropertyDiagnosticContextType.Argument, $"{i + 1} ({arg.Name})");
@@ -118,132 +102,123 @@ public class FunctorActionValidator
     }
 }
 
-public partial class FunctorParser
+public sealed class FunctorParserEngine(StatDefinitionRepository definitions, DiagnosticContext ctx,
+    StatValueValidatorFactory validatorFactory, ExpressionType type, PropertyDiagnosticContainer errors,
+    CodeLocation rootLocation, int tokenOffset)
 {
-    private readonly DiagnosticContext Context;
-    private readonly FunctorActionValidator ActionValidator;
-    private readonly byte[] Source;
-    private readonly PropertyDiagnosticContainer Errors;
-    private readonly CodeLocation RootLocation;
-    private readonly FunctorScanner StatScanner;
-    private readonly int TokenOffset;
+    private readonly FunctorActionValidator _actionValidator = new(definitions, ctx, validatorFactory, type);
+    private readonly PropertyDiagnosticContainer _errors = errors ?? throw new ArgumentNullException(nameof(errors));
+    private readonly CodeLocation _rootLocation = rootLocation;
+    private readonly int _tokenOffset = tokenOffset;
+    private IFunctorNode? _parsedAstRoot;
 
-    private int LiteralStart;
-    private int ActionStart;
-
-    public FunctorParser(FunctorScanner scnr, StatDefinitionRepository definitions,
-        DiagnosticContext ctx, StatValueValidatorFactory validatorFactory, byte[] source, ExpressionType type,
-        PropertyDiagnosticContainer errors, CodeLocation rootLocation, int tokenOffset) : base(scnr)
+    public bool Parse(string expressionText, out string errorMessage)
     {
-        Context = ctx;
-        StatScanner = scnr;
-        Source = source;
-        ActionValidator = new FunctorActionValidator(definitions, ctx, validatorFactory, type);
-        Errors = errors;
-        RootLocation = rootLocation;
-        TokenOffset = tokenOffset;
-    }
-
-    public object GetParsedObject()
-    {
-        return CurrentSemanticValue;
-    }
-
-    private List<Functor> MakeFunctorList() => new List<Functor>();
-
-    private List<Functor> SetTextKey(object functors, object textKey)
-    {
-        var props = functors as List<Functor>;
-        var tk = (string)textKey;
-        foreach (var property in props)
+        if (FunctorCombinatorParser.TryParse(expressionText, out var rootNode, out errorMessage))
         {
-            property.TextKey = tk;
+            _parsedAstRoot = rootNode;
+            return true;
         }
-        return props;
+        return false;
     }
 
-    private List<Functor> MergeFunctors(object functors, object functors2)
+    public object ParseFromAST()
     {
-        var props = functors as List<Functor>;
-        props.Concat(functors2 as List<Functor>);
-        return props;
-    }
+        if (_parsedAstRoot is null) return new List<Functor>();
 
-    private List<Functor> AddFunctor(object functorss, object functors)
-    {
-        var props = functorss as List<Functor>;
-        props.Add(functors as Functor);
-        return props;
-    }
-
-    private Functor MakeFunctor(object context, object condition, object action) => new Functor
-    {
-        Context = (string)context,
-        Condition = condition as object,
-        Action = action as FunctorAction
-    };
-
-    private object MakeFunctorOrTextKeyFunctors(object context, object condition, object action)
-    {
-        if (action is FunctorAction)
+        return _parsedAstRoot switch
         {
-            return MakeFunctor(context, condition, action);
-        }
-        else
+            FunctorListNode list => ProcessList(list.Functors),
+            ActionNode action => new List<string>(action.Arguments),
+            _ => throw new InvalidDataException("Parser architecture collision: Unsupported root syntax mapping block intercepted.")
+        };
+    }
+
+    private List<Functor> ProcessList(List<IFunctorNode> nodes)
+    {
+        List<Functor> functors = [];
+        foreach (var node in nodes)
         {
-            return action;
+            switch (node)
+            {
+                case FunctorNode func:
+                    var derivedFunctors = FlattenActionNode(func.Action, func.Contexts, func.Condition);
+                    functors.AddRange(derivedFunctors);
+                    break;
+
+                case TextKeyFunctorNode tk:
+                    var subList = ProcessList(tk.Functors);
+                    foreach (var sub in subList)
+                    {
+                        sub.TextKey ??= tk.TextKey;
+                        functors.Add(sub);
+                    }
+                    break;
+            }
         }
+        return functors;
     }
 
-    private List<string> MakeArgumentList() => new();
-
-    private List<string> AddArgument(object arguments, object arg)
+    private List<Functor> FlattenActionNode(IFunctorNode actionNode, List<string> contexts, string? condition)
     {
-        var args = arguments as List<string>;
-        args.Add(arg == null ? "" : (string)arg);
-        return args;
+        List<Functor> result = [];
+
+        switch (actionNode)
+        {
+            case ActionNode act:
+                var validatedAction = MapAction(act);
+                result.Add(new Functor
+                {
+                    Context = contexts.Count > 0 ? string.Join(",", contexts) : null,
+                    Condition = condition,
+                    Action = validatedAction
+                });
+                break;
+
+            case TextKeyFunctorNode tk:
+                var nestedFunctors = ProcessList(tk.Functors);
+                foreach (var sub in nestedFunctors)
+                {
+                    sub.Context ??= contexts.Count > 0 ? string.Join(",", contexts) : null;
+                    sub.Condition ??= condition;
+                    sub.TextKey ??= tk.TextKey;
+                    result.Add(sub);
+                }
+                break;
+
+            case FunctorNode nestedFunc:
+                var mergedContexts = contexts.Concat(nestedFunc.Contexts).ToList();
+                result.AddRange(FlattenActionNode(nestedFunc.Action, mergedContexts, nestedFunc.Condition ?? condition));
+                break;
+        }
+
+        return result;
     }
 
-    private object MarkActionStart()
+    private FunctorAction MapAction(ActionNode node)
     {
-        ActionStart = StatScanner.TokenStartPos();
-        return null;
-    }
-
-    private FunctorAction MakeAction(object action, object arguments)
-    {
-        var callErrors = new PropertyDiagnosticContainer();
         var act = new FunctorAction
         {
-            Action = (string)action,
-            Arguments = (List<string>)arguments,
-            StartPos = ActionStart,
-            EndPos = StatScanner.TokenEndPos()
+            Action = node.Name,
+            Arguments = [.. node.Arguments],
+            StartPos = node.StartPos,
+            EndPos = node.EndPos
         };
-        ActionValidator.Validate(act, callErrors);
 
+        var callErrors = new PropertyDiagnosticContainer();
         CodeLocation? location = null;
-        if (RootLocation != null)
+
+        if (_rootLocation is not null)
         {
-            location = new CodeLocation(RootLocation.FileName, 
-                RootLocation.StartLine, RootLocation.StartColumn + act.StartPos - TokenOffset, 
-                RootLocation.StartLine, RootLocation.StartColumn + act.EndPos - TokenOffset);
+            location = new CodeLocation(_rootLocation.FileName,
+                _rootLocation.StartLine, _rootLocation.StartColumn + act.StartPos - _tokenOffset,
+                _rootLocation.StartLine, _rootLocation.StartColumn + act.EndPos - _tokenOffset);
         }
 
+        _actionValidator.Validate(act, callErrors, location);
         callErrors.AddContext(PropertyDiagnosticContextType.Call, act.Action, location);
-        callErrors.MergeInto(Errors);
-        return act;
-    }
-    
-    private object InitLiteral()
-    {
-        LiteralStart = StatScanner.TokenStartPos();
-        return null;
-    }
+        callErrors.MergeInto(_errors);
 
-    private string MakeLiteral()
-    {
-        var val = Encoding.UTF8.GetString(Source, LiteralStart, StatScanner.TokenStartPos() - LiteralStart);
-        return val;
+        return act;
     }
 }

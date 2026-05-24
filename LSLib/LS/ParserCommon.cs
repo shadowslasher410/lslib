@@ -1,39 +1,33 @@
-﻿using QUT.Gppg;
+﻿using Superpower.Model;
 
 namespace LSLib.Parser;
-public class CodeLocation : IMerge<CodeLocation>
+
+public sealed class CodeLocation
 {
-    private string fileName;
-    private int startLine;   // start line
-    private int startColumn; // start column
-    private int endLine;     // end line
-    private int endColumn;   // end column
+    /// <summary>
+    /// The name of the file containing the text span.
+    /// </summary>
+    public string FileName { get; private init; } = string.Empty;
 
     /// <summary>
     /// The line at which the text span starts.
     /// </summary>
-    public string FileName { get { return fileName; } }
-
-    /// <summary>
-    /// The line at which the text span starts.
-    /// </summary>
-    public int StartLine { get { return startLine; } }
+    public int StartLine { get; private init; }
 
     /// <summary>
     /// The column at which the text span starts.
     /// </summary>
-    public int StartColumn { get { return startColumn; } }
+    public int StartColumn { get; private init; }
 
     /// <summary>
     /// The line on which the text span ends.
     /// </summary>
-    public int EndLine { get { return endLine; } }
+    public int EndLine { get; private init; }
 
     /// <summary>
-    /// The column of the first character
-    /// beyond the end of the text span.
+    /// The column of the first character beyond the end of the text span.
     /// </summary>
-    public int EndColumn { get { return endColumn; } }
+    public int EndColumn { get; private init; }
 
     /// <summary>
     /// Default no-arg constructor.
@@ -41,19 +35,20 @@ public class CodeLocation : IMerge<CodeLocation>
     public CodeLocation() { }
 
     /// <summary>
-    /// Constructor for text-span with given start and end.
+    /// Constructor for text-span with given start and end parameters context.
     /// </summary>
-    /// <param name="sl">start line</param>
-    /// <param name="sc">start column</param>
-    /// <param name="el">end line </param>
-    /// <param name="ec">end column</param>
+    /// <param name="fl">File name string token path context reference</param>
+    /// <param name="sl">Start line telemetry index coordinate</param>
+    /// <param name="sc">Start column telemetry index coordinate</param>
+    /// <param name="el">End line telemetry index coordinate</param>
+    /// <param name="ec">End column telemetry index coordinate</param>
     public CodeLocation(string fl, int sl, int sc, int el, int ec)
     {
-        fileName = fl;
-        startLine = sl;
-        startColumn = sc;
-        endLine = el;
-        endColumn = ec;
+        FileName = fl ?? throw new ArgumentNullException(nameof(fl));
+        StartLine = sl;
+        StartColumn = sc;
+        EndLine = el;
+        EndColumn = ec;
     }
 
     /// <summary>
@@ -64,6 +59,27 @@ public class CodeLocation : IMerge<CodeLocation>
     /// <returns>The merged span</returns>
     public CodeLocation Merge(CodeLocation last)
     {
-        return new CodeLocation(this.fileName, this.startLine, this.startColumn, last.endLine, last.endColumn);
+        ArgumentNullException.ThrowIfNull(last);
+
+        return new CodeLocation(
+            FileName,
+            StartLine,
+            StartColumn,
+            last.EndLine,
+            last.EndColumn
+        );
+    }
+    /// <summary>
+    /// Factory helper to cleanly construct a CodeLocation from a Superpower TextSpan.
+    /// </summary>
+    public static CodeLocation FromTextSpan(string fileName, TextSpan span)
+    {
+        return new CodeLocation(
+            fileName,
+            span.Position.Line,
+            span.Position.Column,
+            span.Position.Line,
+            span.Position.Column + span.Length
+        );
     }
 }

@@ -4,7 +4,11 @@ public abstract class QueryNode : Node
 {
     public override void MakeScript(TextWriter writer, Story story, Tuple tuple, bool printTypes)
     {
-        writer.Write("{0}(", Name);
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(story);
+        ArgumentNullException.ThrowIfNull(tuple);
+
+        writer.Write("{0}(", Name ?? string.Empty);
         tuple.MakeScript(writer, story, printTypes);
         writer.WriteLine(")");
     }
@@ -12,9 +16,9 @@ public abstract class QueryNode : Node
 
 public class DivQueryNode : QueryNode
 {
-    public override Type NodeType()
+    public override Node.Type NodeType()
     {
-        return Type.DivQuery;
+        return Node.Type.DivQuery;
     }
 
     public override string TypeName()
@@ -25,9 +29,9 @@ public class DivQueryNode : QueryNode
 
 public class InternalQueryNode : QueryNode
 {
-    public override Type NodeType()
+    public override Node.Type NodeType()
     {
-        return Type.InternalQuery;
+        return Node.Type.InternalQuery;
     }
 
     public override string TypeName()
@@ -38,9 +42,9 @@ public class InternalQueryNode : QueryNode
 
 public class UserQueryNode : QueryNode
 {
-    public override Type NodeType()
+    public override Node.Type NodeType()
     {
-        return Type.UserQuery;
+        return Node.Type.UserQuery;
     }
 
     public override string TypeName()

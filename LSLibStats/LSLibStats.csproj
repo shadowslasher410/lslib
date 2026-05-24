@@ -1,18 +1,28 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>annotations</Nullable>
-    <Platforms>AnyCPU;x64</Platforms>
-  </PropertyGroup>
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<LangVersion>14</LangVersion>
+		<PublishTrimmed>true</PublishTrimmed>
+		<PlatformTarget>x64</PlatformTarget>
+		<Platforms>AnyCPU;x64</Platforms>
+	</PropertyGroup>
+	<Target Name="PreBuild" BeforeTargets="PreBuildEvent">
+		<PropertyGroup>
+			<IsWindows>$([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform($([System.Runtime.InteropServices.OSPlatform]::Windows)))</IsWindows>
 
-  <Target Name="PreBuild" BeforeTargets="PreBuildEvent">
-    <Exec Command="&quot;$(SolutionDir)\external\gppg\binaries\GpLex&quot; /out:&quot;$(MSBuildProjectDirectory)\Stats\File\Stat.lex.cs&quot; &quot;$(MSBuildProjectDirectory)\Stats\File\Stat.lex&quot;&#xD;&#xA;&quot;$(SolutionDir)\external\gppg\binaries\Gppg&quot; /out:&quot;$(MSBuildProjectDirectory)\Stats\File\Stat.yy.cs&quot; &quot;$(MSBuildProjectDirectory)\Stats\File\Stat.yy&quot;&#xD;&#xA;&#xD;&#xA;&quot;$(SolutionDir)\external\gppg\binaries\GpLex&quot; /out:&quot;$(MSBuildProjectDirectory)\Stats\Functor\Functor.lex.cs&quot; &quot;$(MSBuildProjectDirectory)\Stats\Functor\Functor.lex&quot;&#xD;&#xA;&quot;$(SolutionDir)\external\gppg\binaries\Gppg&quot; /out:&quot;$(MSBuildProjectDirectory)\Stats\Functor\Functor.yy.cs&quot; &quot;$(MSBuildProjectDirectory)\Stats\Functor\Functor.yy&quot;&#xD;&#xA;&#xD;&#xA;&quot;$(SolutionDir)\external\gppg\binaries\GpLex&quot; /out:&quot;$(MSBuildProjectDirectory)\Stats\Functor\Lua.lex.cs&quot; &quot;$(MSBuildProjectDirectory)\Stats\Functor\Lua.lex&quot;&#xD;&#xA;&quot;$(SolutionDir)\external\gppg\binaries\Gppg&quot; /out:&quot;$(MSBuildProjectDirectory)\Stats\Functor\Lua.yy.cs&quot; &quot;$(MSBuildProjectDirectory)\Stats\Functor\Lua.yy&quot;&#xD;&#xA;&#xD;&#xA;&quot;$(SolutionDir)\external\gppg\binaries\GpLex&quot; /out:&quot;$(MSBuildProjectDirectory)\Stats\Functor\Expression.lex.cs&quot; &quot;$(MSBuildProjectDirectory)\Stats\Functor\Expression.lex&quot;&#xD;&#xA;&quot;$(SolutionDir)\external\gppg\binaries\Gppg&quot; /out:&quot;$(MSBuildProjectDirectory)\Stats\Functor\Expression.yy.cs&quot; &quot;$(MSBuildProjectDirectory)\Stats\Functor\Expression.yy&quot;&#xD;&#xA;&#xD;&#xA;&quot;$(SolutionDir)\external\gppg\binaries\GpLex&quot; /out:&quot;$(MSBuildProjectDirectory)\Stats\Functor\Requirement.lex.cs&quot; &quot;$(MSBuildProjectDirectory)\Stats\Functor\Requirement.lex&quot;&#xD;&#xA;&quot;$(SolutionDir)\external\gppg\binaries\Gppg&quot; /out:&quot;$(MSBuildProjectDirectory)\Stats\Functor\Requirement.yy.cs&quot; &quot;$(MSBuildProjectDirectory)\Stats\Functor\Requirement.yy&quot;&#xD;&#xA;&#xD;&#xA;&quot;$(SolutionDir)\external\gppg\binaries\GpLex&quot; /out:&quot;$(MSBuildProjectDirectory)\Stats\Functor\RollConditions.lex.cs&quot; &quot;$(MSBuildProjectDirectory)\Stats\Functor\RollConditions.lex&quot;&#xD;&#xA;&quot;$(SolutionDir)\external\gppg\binaries\Gppg&quot; /out:&quot;$(MSBuildProjectDirectory)\Stats\Functor\RollConditions.yy.cs&quot; &quot;$(MSBuildProjectDirectory)\Stats\Functor\RollConditions.yy&quot;&#xD;&#xA;" />
-  </Target>
+			<ExeExt Condition="'$(IsWindows)' == 'true'">.exe</ExeExt>
+			<ExeExt Condition="'$(IsWindows)' != 'true'"></ExeExt>
+		</PropertyGroup>
+	</Target>
+	<ItemGroup>
+	  <PackageReference Include="Superpower" Version="3.2.1" />
+	</ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\LSLib\LSLib.csproj" />
-  </ItemGroup>
+	<ItemGroup>
+		<ProjectReference Include="..\LSLib\LSLib.csproj" />
+	</ItemGroup>
 
 </Project>

@@ -3,26 +3,30 @@ using LSLib.Granny.GR2;
 
 namespace LSLib.Granny.Model.CurveData;
 
-public class D3Constant32f : AnimationCurveData
+public sealed class D3Constant32f : AnimationCurveData
 {
-    [Serialization(Type = MemberType.Inline)]
-    public CurveDataHeader CurveDataHeader_D3Constant32f;
-    public Int16 Padding;
-    [Serialization(ArraySize = 3)]
-    public float[] Controls;
+    [field: Serialization(Type = MemberType.Inline)]
+    public CurveDataHeader CurveDataHeader_D3Constant32f { get; set; } = new();
 
-    public override int NumKnots()
-    {
-        return 1;
-    }
+    public short Padding { get; set; }
 
-    public override List<float> GetKnots()
-    {
-        return [0.0f];
-    }
+    [field: Serialization(ArraySize = 3)]
+    public float[] Controls { get; set; } = [];
+
+    public override int NumKnots() => 1;
+
+    public override List<float> GetKnots() => [0.0f];
 
     public override List<Vector3> GetPoints()
     {
-        return [new Vector3(Controls[0], Controls[1], Controls[2])];
+        if (Controls is not { Length: >= 3 })
+        {
+            throw new ParsingException("Constant curve mapping execution aborted: Controls source data array contains insufficient layout vectors.");
+        }
+
+        return
+        [
+            new(Controls[0], Controls[1], Controls[2])
+        ];
     }
 }

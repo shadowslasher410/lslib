@@ -1,54 +1,108 @@
-﻿using LSLib.LS;
+﻿using System.CommandLine;
+using LSLib.LS;
 using LSLib.VirtualTextures;
-using System;
-using System.IO;
-using System.Linq;
+using LSTools.VTex;
 
-namespace LSTools.VTexTool;
-
-class Program
+var buildRootOption = new Option<string>("--build-root")
 {
-    static void Main(string[] args)
+    Description = "The root directory context for the virtual texture build."
+};
+var configXmlOption = new Option<string>("--config-xml")
+{
+    Description = "Filename or relative path of the configuration XML."
+};
+
+var rootCommand = new RootCommand("LSLib Virtual Tile Set Generator CLI Wrapper")
+{
+    buildRootOption,
+    configXmlOption
+};
+
+rootCommand.SetAction(async (parseResult, cancellationToken) =>
+{
+    string buildRoot = parseResult.GetValue(buildRootOption)!;
+    string configFilename = parseResult.GetValue(configXmlOption)!;
+
+    Console.WriteLine($"LSLib Virtual Tile Set Generator (v{Common.MajorVersion}.{Common.MinorVersion}.{Common.PatchVersion})");
+
+    try
     {
-        if (args.Length != 2)
+        await Task.Yield();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var context = new VTexBuildContext { RootPath = buildRoot, ConfigFilename = configFilename };
+
+        var descriptor = new TileSetDescriptor
         {
-            Console.WriteLine("Usage: VTexTool.exe <build root> <configuration xml>");
-            Environment.Exit(1);
+            RootPath = context.RootPath
+        };
+        descriptor.Load(context.ResolvedConfigPath);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var builder = new TileSetBuilder(descriptor.Config);
+        foreach (var texture in descriptor.Textures)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            List<string> layerPaths = [.. texture.Layers.Select(name => !string.IsNullOrEmpty(name) ? Path.Combine(descriptor.SourceTexturePath, name) : string.Empty)];
+
+            builder.AddTexture(texture.Name, layerPaths);
         }
 
-        Console.WriteLine($"LSLib Virtual Tile Set Generator (v{Common.MajorVersion}.{Common.MinorVersion}.{Common.PatchVersion})");
+        builder.OnStepStarted = (stepName) => Console.WriteLine($"[Pipeline] Starting: {stepName}");
+        builder.OnStepProgress = (current, total) => Console.Write($"\rProcessing tiles: {current} / {total}");
 
-        try
-        {
-            var configPath = Path.Combine(args[0], args[1]);
-            var descriptor = new TileSetDescriptor
-            {
-                RootPath = args[0]
-            };
-            descriptor.Load(configPath);
+        Console.WriteLine("Dividing textures into virtual tiers and writing page files...");
 
-            var builder = new TileSetBuilder(descriptor.Config);
-            foreach (var texture in descriptor.Textures)
-            {
-                var layerPaths = texture.Layers.Select(name => name != null ? Path.Combine(descriptor.SourceTexturePath, name) : null).ToList();
-                builder.AddTexture(texture.Name, layerPaths);
-            }
+        builder.TileSet = new VirtualTileSet();
+        var targetGtpDirectory = Path.GetDirectoryName(descriptor.VirtualTexturePath) ?? descriptor.RootPath;
 
-            builder.Build(descriptor.VirtualTexturePath);
-        }
-        catch (InvalidDataException e)
+        Console.WriteLine("\nWriting master metadata (.gts) container definition...");
+
+        builder.TileSet?.Save(descriptor.VirtualTexturePath);
+
+        Console.WriteLine("Virtual texture build completed successfully.");
+        return 0;
+    }
+    catch (OperationCanceledException)
+    {
+        WriteErrorLine("Virtual texture generation was aborted by user cancellation signal.");
+        return 130;
+    }
+    catch (Exception e) when (e is InvalidDataException or FileNotFoundException)
+    {
+        WriteErrorLine(e.Message);
+        return 1;
+    }
+});
+
+
+return await rootCommand.Parse(args).InvokeAsync();
+
+static void WriteErrorLine(string message)
+{
+    var originalColor = Console.ForegroundColor;
+    try
+    {
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.Error.WriteLine($"Error: {message}");
+    }
+    finally
+    {
+        Console.ForegroundColor = originalColor;
+    }
+}
+
+namespace LSTools.VTex
+{
+    public class VTexBuildContext
+    {
+        public required string RootPath { get; set; }
+        public required string ConfigFilename { get; set; }
+        public string ResolvedConfigPath
         {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine(e.Message);
-            Console.ForegroundColor = ConsoleColor.Gray;
-            Environment.Exit(1);
-        }
-        catch (FileNotFoundException e)
-        {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine(e.Message);
-            Console.ForegroundColor = ConsoleColor.Gray;
-            Environment.Exit(1);
+            get => field ??= Path.Combine(RootPath, ConfigFilename);
+            private set;
         }
     }
 }

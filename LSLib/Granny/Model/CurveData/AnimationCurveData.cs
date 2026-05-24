@@ -1,77 +1,11 @@
 ﻿using OpenTK.Mathematics;
 using LSLib.Granny.GR2;
+using System.Runtime.CompilerServices;
 
 namespace LSLib.Granny.Model.CurveData;
-public class CurveRegistry
-{
-    private static Dictionary<Type, CurveFormat> TypeToFormatMap;
-    private static Dictionary<String, Type> NameToTypeMap;
-
-    private static void Register(Type type, CurveFormat format)
-    {
-        TypeToFormatMap.Add(type, format);
-        NameToTypeMap.Add(type.Name, type);
-    }
-
-    private static void Init()
-    {
-        if (TypeToFormatMap != null)
-        {
-            return;
-        }
-
-        TypeToFormatMap = [];
-        NameToTypeMap = [];
-
-        Register(typeof(DaKeyframes32f), CurveFormat.DaKeyframes32f);
-        Register(typeof(DaK32fC32f), CurveFormat.DaK32fC32f);
-        Register(typeof(DaIdentity), CurveFormat.DaIdentity);
-        Register(typeof(DaConstant32f), CurveFormat.DaConstant32f);
-        Register(typeof(D3Constant32f), CurveFormat.D3Constant32f);
-        Register(typeof(D4Constant32f), CurveFormat.D4Constant32f);
-        Register(typeof(DaK16uC16u), CurveFormat.DaK16uC16u);
-        Register(typeof(DaK8uC8u), CurveFormat.DaK8uC8u);
-        Register(typeof(D4nK16uC15u), CurveFormat.D4nK16uC15u);
-        Register(typeof(D4nK8uC7u), CurveFormat.D4nK8uC7u);
-        Register(typeof(D3K16uC16u), CurveFormat.D3K16uC16u);
-        Register(typeof(D3K8uC8u), CurveFormat.D3K8uC8u);
-        Register(typeof(D9I1K16uC16u), CurveFormat.D9I1K16uC16u);
-        Register(typeof(D9I3K16uC16u), CurveFormat.D9I3K16uC16u);
-        Register(typeof(D9I1K8uC8u), CurveFormat.D9I1K8uC8u);
-        Register(typeof(D9I3K8uC8u), CurveFormat.D9I3K8uC8u);
-        Register(typeof(D3I1K32fC32f), CurveFormat.D3I1K32fC32f);
-        Register(typeof(D3I1K16uC16u), CurveFormat.D3I1K16uC16u);
-        Register(typeof(D3I1K8uC8u), CurveFormat.D3I1K8uC8u);
-    }
-
-    public static Dictionary<String, Type> GetAllTypes()
-    {
-        Init();
-
-        return NameToTypeMap;
-    }
-
-    public static Type Resolve(String name)
-    {
-        Init();
-
-        if (!NameToTypeMap.TryGetValue(name, out Type type))
-            throw new ParsingException("Unsupported curve type: " + name);
-
-        return type;
-    }
-}
 
 public enum CurveFormat
 {
-    // Types:
-    // Da: (animation) 3x3 matrix
-    // D[1-4]: 1 - 4 component vector
-    // I[1/3]: 1/3 values for the main diagonal, others are zero
-    // n: Normalized quaternion
-    // Constant: Constant vector/matrix
-    // K[n][nothing/u/f]: n-bit value for knots; u = unsigned; f = floating point
-    // C[n][nothing/u/f]: n-bit value for controls; u = unsigned; f = floating point
     DaKeyframes32f = 0,
     DaK32fC32f = 1,
     DaIdentity = 2,
@@ -93,92 +27,115 @@ public enum CurveFormat
     D3I1K8uC8u = 18
 }
 
-public class CurveDataHeader
+public static class CurveRegistry
 {
-    public byte Format;
-    public byte Degree;
-
-    public bool IsFloat()
+    private static readonly Dictionary<string, Type> NameToTypeMap = new(StringComparer.Ordinal)
     {
-        switch ((CurveFormat)Format)
-        {
-            case CurveFormat.DaKeyframes32f:
-            case CurveFormat.DaK32fC32f:
-            case CurveFormat.DaIdentity:
-            case CurveFormat.DaConstant32f:
-            case CurveFormat.D3Constant32f:
-            case CurveFormat.D4Constant32f:
-                return true;
+        [nameof(CurveFormat.DaKeyframes32f)] = typeof(DaKeyframes32f),
+        [nameof(CurveFormat.DaK32fC32f)] = typeof(DaK32fC32f),
+        [nameof(CurveFormat.DaIdentity)] = typeof(DaIdentity),
+        [nameof(CurveFormat.DaConstant32f)] = typeof(DaConstant32f),
+        [nameof(CurveFormat.D3Constant32f)] = typeof(D3Constant32f),
+        [nameof(CurveFormat.D4Constant32f)] = typeof(D4Constant32f),
+        [nameof(CurveFormat.DaK16uC16u)] = typeof(DaK16uC16u),
+        [nameof(CurveFormat.DaK8uC8u)] = typeof(DaK8uC8u),
+        [nameof(CurveFormat.D4nK16uC15u)] = typeof(D4nK16uC15u),
+        [nameof(CurveFormat.D4nK8uC7u)] = typeof(D4nK8uC7u),
+        [nameof(CurveFormat.D3K16uC16u)] = typeof(D3K16uC16u),
+        [nameof(CurveFormat.D3K8uC8u)] = typeof(D3K8uC8u),
+        [nameof(CurveFormat.D9I1K16uC16u)] = typeof(D9I1K16uC16u),
+        [nameof(CurveFormat.D9I3K16uC16u)] = typeof(D9I3K16uC16u),
+        [nameof(CurveFormat.D9I1K8uC8u)] = typeof(D9I1K8uC8u),
+        [nameof(CurveFormat.D9I3K8uC8u)] = typeof(D9I3K8uC8u),
+        [nameof(CurveFormat.D3I1K32fC32f)] = typeof(D3I1K32fC32f),
+        [nameof(CurveFormat.D3I1K16uC16u)] = typeof(D3I1K16uC16u),
+        [nameof(CurveFormat.D3I1K8uC8u)] = typeof(D3I1K8uC8u)
+    };
 
-            default:
-                return false;
-        }
-    }
+    public static Dictionary<string, Type> GetAllTypes() => NameToTypeMap;
 
-    public int BytesPerKnot()
+    public static Type Resolve(string name)
     {
-        switch ((CurveFormat)Format)
-        {
-            case CurveFormat.DaKeyframes32f:
-            case CurveFormat.DaK32fC32f:
-            case CurveFormat.D3I1K32fC32f:
-                return 4;
+        ArgumentException.ThrowIfNullOrEmpty(name);
 
-            case CurveFormat.DaIdentity:
-            case CurveFormat.DaConstant32f:
-            case CurveFormat.D3Constant32f:
-            case CurveFormat.D4Constant32f:
-                throw new ParsingException("Should not serialize knots/controls here");
+        if (!NameToTypeMap.TryGetValue(name, out var type))
+            throw new ParsingException($"Unsupported animation curve structural descriptor identity payload: {name}");
 
-            case CurveFormat.DaK16uC16u:
-            case CurveFormat.D4nK16uC15u:
-            case CurveFormat.D3K16uC16u:
-            case CurveFormat.D9I1K16uC16u:
-            case CurveFormat.D9I3K16uC16u:
-            case CurveFormat.D3I1K16uC16u:
-                return 2;
-
-            case CurveFormat.DaK8uC8u:
-            case CurveFormat.D4nK8uC7u:
-            case CurveFormat.D3K8uC8u:
-            case CurveFormat.D9I1K8uC8u:
-            case CurveFormat.D9I3K8uC8u:
-            case CurveFormat.D3I1K8uC8u:
-                return 1;
-
-            default:
-                throw new ParsingException("Unsupported curve data format");
-        }
+        return type;
     }
 }
 
-class ControlUInt8
+public sealed class CurveDataHeader
 {
-    public Byte UInt8 = 0;
-}
+    public byte Format { get; set; }
+    public byte Degree { get; set; }
 
-class ControlUInt16
-{
-    public UInt16 UInt16 = 0;
-}
-
-class ControlReal32
-{
-    public Single Real32 = 0;
-}
-
-class AnimationCurveDataTypeSelector : VariantTypeSelector
-{
-    public Type SelectType(MemberDefinition member, object node)
+    public bool IsFloat() => (CurveFormat)Format switch
     {
-        return null;
+        CurveFormat.DaKeyframes32f or
+        CurveFormat.DaK32fC32f or
+        CurveFormat.DaIdentity or
+        CurveFormat.DaConstant32f or
+        CurveFormat.D3Constant32f or
+        CurveFormat.D4Constant32f => true,
+        _ => false
+    };
+
+    public int BytesPerKnot() => (CurveFormat)Format switch
+    {
+        CurveFormat.DaKeyframes32f or
+        CurveFormat.DaK32fC32f or
+        CurveFormat.D3I1K32fC32f => 4,
+
+        CurveFormat.DaIdentity or
+        CurveFormat.DaConstant32f or
+        CurveFormat.D3Constant32f or
+        CurveFormat.D4Constant32f => throw new ParsingException("Constant structural curve frames omit explicit knot timeline serializations."),
+
+        CurveFormat.DaK16uC16u or
+        CurveFormat.D4nK16uC15u or
+        CurveFormat.D3K16uC16u or
+        CurveFormat.D9I1K16uC16u or
+        CurveFormat.D9I3K16uC16u or
+        CurveFormat.D3I1K16uC16u => 2,
+
+        CurveFormat.DaK8uC8u or
+        CurveFormat.D4nK8uC7u or
+        CurveFormat.D3K8uC8u or
+        CurveFormat.D9I1K8uC8u or
+        CurveFormat.D9I3K8uC8u or
+        CurveFormat.D3I1K8uC8u => 1,
+
+        _ => throw new ParsingException($"Unsupported animation curve bit-width format tracker identifier: {Format}")
+    };
+}
+
+public sealed class ControlUInt8 { public byte UInt8 { get; set; } = 0; }
+public sealed class ControlUInt16 { public ushort UInt16 { get; set; } = 0; }
+public sealed class ControlReal32 { public float Real32 { get; set; } = 0f; }
+
+public sealed class AnimationCurveDataTypeSelector : IVariantTypeSelector
+{
+    public static Type SelectTypeStatic(MemberDefinition? member, object? node)
+    {
+        _ = member; _ = node;
+        return typeof(object);
     }
+
+    public Type SelectType(MemberDefinition member, object node) => SelectTypeStatic(member, node);
 
     public Type SelectType(MemberDefinition member, StructDefinition defn, object parent)
     {
+        ArgumentNullException.ThrowIfNull(defn);
+        _ = member; _ = parent;
+
+        if (defn.Members is not { Count: > 0 } || string.IsNullOrEmpty(defn.Members[0].Name))
+            throw new ParsingException("Structural node resolution failure: target layout parameters metadata dictionary references missing.");
+
         var fieldName = defn.Members[0].Name;
-        if (fieldName[..16] != "CurveDataHeader_")
-            throw new ParsingException("Unrecognized curve data header type: " + fieldName);
+
+        if (fieldName.Length <= 16 || !fieldName.AsSpan(0, 16).Equals("CurveDataHeader_", StringComparison.Ordinal))
+            throw new ParsingException($"Unrecognized curve data schema descriptor pattern validation tracking sequence: {fieldName}");
 
         var curveType = fieldName[16..];
         return CurveRegistry.Resolve(curveType);
@@ -193,44 +150,37 @@ public abstract class AnimationCurveData
         Position,
         Rotation,
         ScaleShear
-    };
+    }
 
-    [Serialization(Kind = SerializationKind.None)]
-    public Animation ParentAnimation;
+    [field: Serialization(Kind = SerializationKind.None)]
+    public Animation? ParentAnimation { get; set; }
 
-    protected float ConvertOneOverKnotScaleTrunc(UInt16 oneOverKnotScaleTrunc)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    protected static float ConvertOneOverKnotScaleTrunc(ushort oneOverKnotScaleTrunc)
     {
-        UInt32[] i = [(UInt32)oneOverKnotScaleTrunc << 16];
-        float[] f = new float[1];
-        Buffer.BlockCopy(i, 0, f, 0, i.Length * 4);
-        return f[0];
+        uint rawBits = (uint)oneOverKnotScaleTrunc << 16;
+        return BitConverter.UInt32BitsToSingle(rawBits);
     }
 
     public float Duration()
     {
-        return GetKnots()[NumKnots() - 1];
+        var knots = GetKnots();
+        if (knots is not { Count: > 0 }) return 0f;
+        return knots[^1];
     }
 
     public abstract int NumKnots();
     public abstract List<float> GetKnots();
 
-    public virtual List<Vector3> GetPoints()
-    {
-        throw new ParsingException("Curve does not contain position data");
-    }
-
-    public virtual List<Matrix3> GetMatrices()
-    {
-        throw new ParsingException("Curve does not contain rotation data");
-    }
+    public virtual List<Vector3> GetPoints() => throw new ParsingException("Curve does not contain position data layout configurations.");
+    public virtual List<Matrix3> GetMatrices() => throw new ParsingException("Curve does not contain rotation data layout configurations.");
 
     public virtual List<Quaternion> GetQuaternions()
     {
-        var matrices = GetMatrices();
-        List<Quaternion> quats = new(matrices.Count);
+        var matrices = GetMatrices() ?? throw new ParsingException("Failed to unwrap rotation translation transformations matrices list.");
+        var quats = new List<Quaternion>(matrices.Count);
         foreach (var matrix in matrices)
         {
-            // Check that the matrix is orthogonal
             for (var i = 0; i < 3; i++)
             {
                 for (var j = 0; j < i; j++)
@@ -240,9 +190,7 @@ public abstract class AnimationCurveData
                 }
             }
 
-            // Check that the matrix is special orthogonal
-            // det(matrix) = 1
-            if (Math.Abs(matrix.Determinant - 1) > 0.001)
+            if (MathF.Abs(matrix.Determinant - 1.0f) > 0.001f)
                 throw new ParsingException("Cannot convert into quaternion: Transformation matrix is not special orthogonal!");
 
             quats.Add(matrix.ExtractRotation());
@@ -250,35 +198,30 @@ public abstract class AnimationCurveData
 
         return quats;
     }
-        
 
     public void ExportKeyframes(KeyframeTrack track, ExportType type)
     {
+        ArgumentNullException.ThrowIfNull(track);
+
         var numKnots = NumKnots();
         var knots = GetKnots();
-        if (type == ExportType.Position)
+
+        switch (type)
         {
-            var positions = GetPoints();
-            for (var i = 0; i < numKnots; i++)
-            {
-                track.AddTranslation(knots[i], positions[i]);
-            }
-        }
-        else if (type == ExportType.Rotation)
-        {
-            var quats = GetQuaternions();
-            for (var i = 0; i < numKnots; i++)
-            {
-                track.AddRotation(knots[i], quats[i]);
-            }
-        }
-        else if (type == ExportType.ScaleShear)
-        {
-            var mats = GetMatrices();
-            for (var i = 0; i < numKnots; i++)
-            {
-                track.AddScaleShear(knots[i], mats[i]);
-            }
+            case ExportType.Position:
+                var positions = GetPoints();
+                for (var i = 0; i < numKnots; i++) track.AddTranslation(knots[i], positions[i]);
+                break;
+
+            case ExportType.Rotation:
+                var quats = GetQuaternions();
+                for (var i = 0; i < numKnots; i++) track.AddRotation(knots[i], quats[i]);
+                break;
+
+            case ExportType.ScaleShear:
+                var mats = GetMatrices();
+                for (var i = 0; i < numKnots; i++) track.AddScaleShear(knots[i], mats[i]);
+                break;
         }
     }
 }

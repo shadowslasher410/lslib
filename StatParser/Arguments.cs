@@ -1,43 +1,80 @@
-﻿using CommandLineParser.Arguments;
+﻿using System.CommandLine;
 
-namespace LSTools.StatParser;
+namespace StatParser;
 
 public class CommandLineArguments
 {
-    [SwitchArgument("no-packages", false,
-        Description = "Don't look for goal files inside packages",
-        Optional = true
-    )]
-    public bool NoPackages;
+    public required bool NoPackages { get; init; }
+    public required string[] Mods { get; init; } = [];
+    public required string[] Dependencies { get; init; } = [];
+    public required string GameDataPath { get; init; } = string.Empty;
+    public required string[] PackagePaths { get; init; } = [];
 
-    [ValueArgument(typeof(string), "mod",
-        Description = "Mod to add",
-        AllowMultiple = true,
-        ValueOptional = false,
-        Optional = false
-    )]
-    public string[] Mods;
+    public static RootCommand BuildRootCommand(Action<CommandLineArguments> executionHandler)
+    {
+        var noPackagesOpt = new Option<bool>("--no-packages")
+        {
+            Description = "Don't look for goal files inside packages",
+            Required = false
+        };
 
-    [ValueArgument(typeof(string), "dependency",
-        Description = "Dependencies to add",
-        AllowMultiple = true,
-        ValueOptional = false,
-        Optional = true
-    )]
-    public string[] Dependencies;
+        var modOpt = new Option<string[]>("--mod")
+        {
+            Description = "Mod to add",
+            AllowMultipleArgumentsPerToken = true,
+            Arity = ArgumentArity.OneOrMore,
+            Required = true
+        };
 
-    [ValueArgument(typeof(string), "game-data-path",
-        Description = "Game data path",
-        ValueOptional = false,
-        Optional = true
-    )]
-    public string GameDataPath;
+        var dependencyOpt = new Option<string[]>("--dependency")
+        {
+            Description = "Dependencies to add",
+            AllowMultipleArgumentsPerToken = true,
+            Arity = ArgumentArity.OneOrMore,
+            Required = false,
+            DefaultValueFactory = _ => []
+        };
 
-    [ValueArgument(typeof(string), "package-paths",
-        Description = "Additional package path(s)",
-        AllowMultiple = true,
-        ValueOptional = false,
-        Optional = true
-    )]
-    public string[] PackagePaths;
+        var gameDataPathOpt = new Option<string>("--game-data-path")
+        {
+            Description = "Game data path",
+            Arity = ArgumentArity.ExactlyOne,
+            Required = false,
+            DefaultValueFactory = _ => string.Empty
+        };
+
+        var packagePathsOpt = new Option<string[]>("--package-paths")
+        {
+            Description = "Additional package path(s)",
+            AllowMultipleArgumentsPerToken = true,
+            Arity = ArgumentArity.OneOrMore,
+            Required = false,
+            DefaultValueFactory = _ => []
+        };
+
+        var rootCommand = new RootCommand("Osiris Stat Parser Engine Utility")
+        {
+            noPackagesOpt,
+            modOpt,
+            dependencyOpt,
+            gameDataPathOpt,
+            packagePathsOpt
+        };
+
+        rootCommand.SetAction(parseResult =>
+        {
+            var boundArguments = new CommandLineArguments
+            {
+                NoPackages = parseResult.GetValue(noPackagesOpt),
+                Mods = parseResult.GetValue(modOpt) ?? [],
+                Dependencies = parseResult.GetValue(dependencyOpt) ?? [],
+                GameDataPath = parseResult.GetValue(gameDataPathOpt)!,
+                PackagePaths = parseResult.GetValue(packagePathsOpt) ?? []
+            };
+
+            executionHandler(boundArguments);
+        });
+
+        return rootCommand;
+    }
 }

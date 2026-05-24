@@ -1,164 +1,154 @@
-﻿using System.IO.Compression;
-using System.IO.MemoryMappedFiles;
-using System.Runtime.InteropServices.Marshalling;
+﻿using System.IO.MemoryMappedFiles;
+using System.Runtime.CompilerServices;
 
 namespace LSLib.LS;
 
 
-public class ReadOnlySubstream : Stream
+public class ReadOnlySubstream(Stream sourceStream, long offset, long size) : Stream
 {
-    private readonly Stream SourceStream;
-    private readonly long FileOffset;
-    private readonly long Size;
-    private long CurPosition = 0;
+    private readonly Stream _sourceStream = sourceStream ?? throw new ArgumentNullException(nameof(sourceStream));
+    private readonly long _fileOffset = offset;
+    private readonly long _size = size;
+    private long _curPosition;
 
-    public ReadOnlySubstream(Stream sourceStream, long offset, long size)
+    public override bool CanRead => true;
+    public override bool CanSeek => false;
+    public override bool CanWrite => false;
+    public override long Length => _size;
+
+    public override long Position
     {
-        SourceStream = sourceStream;
-        FileOffset = offset;
-        Size = size;
+        get => _curPosition;
+        set => throw new NotSupportedException();
     }
-
-    public override bool CanRead { get { return true; } }
-    public override bool CanSeek { get { return false; } }
 
     public override int Read(byte[] buffer, int offset, int count)
     {
-        SourceStream.Seek(FileOffset + CurPosition, SeekOrigin.Begin);
-        long readable = Size - CurPosition;
-        int bytesToRead = (readable < count) ? (int)readable : count;
-        var read = SourceStream.Read(buffer, offset, bytesToRead);
-        CurPosition += read;
+        ArgumentNullException.ThrowIfNull(buffer);
+        _sourceStream.Seek(_fileOffset + _curPosition, SeekOrigin.Begin);
+        long readable = _size - _curPosition;
+        int bytesToRead = readable < count ? (int)readable : count;
+        int read = _sourceStream.Read(buffer, offset, bytesToRead);
+        _curPosition += read;
         return read;
+    }
+
+    public override int Read(Span<byte> buffer)
+    {
+        _sourceStream.Seek(_fileOffset + _curPosition, SeekOrigin.Begin);
+        long readable = _size - _curPosition;
+        int bytesToRead = readable < buffer.Length ? (int)readable : buffer.Length;
+        int read = _sourceStream.Read(buffer[..bytesToRead]);
+        _curPosition += read;
+        return read;
+    }
+
+    public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+    {
+        _sourceStream.Seek(_fileOffset + _curPosition, SeekOrigin.Begin);
+        long readable = _size - _curPosition;
+        int bytesToRead = readable < buffer.Length ? (int)readable : buffer.Length;
+        _curPosition += bytesToRead;
+        return _sourceStream.ReadAsync(buffer[..bytesToRead], cancellationToken);
     }
 
     public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
     {
-        SourceStream.Seek(FileOffset + CurPosition, SeekOrigin.Begin);
-        long readable = Size - CurPosition;
-        int bytesToRead = (readable < count) ? (int)readable : count;
-        CurPosition += bytesToRead;
-        return SourceStream.ReadAsync(buffer, offset, bytesToRead, cancellationToken);
+        ArgumentNullException.ThrowIfNull(buffer);
+        _sourceStream.Seek(_fileOffset + _curPosition, SeekOrigin.Begin);
+        long readable = _size - _curPosition;
+        int bytesToRead = readable < count ? (int)readable : count;
+        _curPosition += bytesToRead;
+        return _sourceStream.ReadAsync(buffer, offset, bytesToRead, cancellationToken);
     }
 
-    public override long Seek(long offset, SeekOrigin origin)
-    {
-        throw new NotSupportedException();
-    }
-
-
-    public override long Position
-    {
-        get { return CurPosition; }
-        set { throw new NotSupportedException(); }
-    }
-
-    public override bool CanTimeout { get { return SourceStream.CanTimeout; } }
-    public override bool CanWrite { get { return false; } }
-    public override long Length { get { return Size; } }
-    public override void SetLength(long value) { throw new NotSupportedException(); }
-    public override void Write(byte[] buffer, int offset, int count) { throw new NotSupportedException(); }
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     public override void Flush() { }
 }
 
-
 public static class BinUtils
 {
-    public static T ReadStruct<T>(BinaryReader reader)
+    public static T ReadStruct<T>(BinaryReader reader) where T : struct
     {
-        T outStruct;
-        int count = Marshal.SizeOf(typeof(T));
+        ArgumentNullException.ThrowIfNull(reader);
+        int count = Unsafe.SizeOf<T>();
         byte[] readBuffer = reader.ReadBytes(count);
-        GCHandle handle = GCHandle.Alloc(readBuffer, GCHandleType.Pinned);
-        outStruct = (T)Marshal.PtrToStructure(handle.AddrOfPinnedObject(), typeof(T));
-        handle.Free();
-        return outStruct;
+        if (readBuffer.Length < count) throw new EndOfStreamException($"Required {count} bytes, but reached EOF.");
+        return MemoryMarshal.Read<T>(readBuffer);
     }
 
-    public static void ReadStructs<T>(BinaryReader reader, T[] elements)
+    public static void ReadStructs<T>(BinaryReader reader, T[] elements) where T : struct
     {
-        int elementSize = Marshal.SizeOf(typeof(T));
-        int bytes = elementSize * elements.Length;
-        byte[] readBuffer = reader.ReadBytes(bytes);
-        GCHandle handle = GCHandle.Alloc(readBuffer, GCHandleType.Pinned);
-        var addr = handle.AddrOfPinnedObject();
-        for (var i = 0; i < elements.Length; i++)
-        {
-            var elementAddr = new IntPtr(addr.ToInt64() + elementSize * i);
-            elements[i] = Marshal.PtrToStructure<T>(elementAddr);
-        }
-        handle.Free();
+        ArgumentNullException.ThrowIfNull(reader);
+        ArgumentNullException.ThrowIfNull(elements);
+        int elementSize = Unsafe.SizeOf<T>();
+        int totalBytes = elementSize * elements.Length;
+        byte[] readBuffer = reader.ReadBytes(totalBytes);
+        if (readBuffer.Length < totalBytes) throw new EndOfStreamException();
+
+        Span<byte> sourceSpan = readBuffer;
+        Span<T> targetSpan = elements;
+        MemoryMarshal.Cast<byte, T>(sourceSpan).CopyTo(targetSpan);
     }
 
-    public static void ReadStructsBlitted<T>(BinaryReader reader, T[] elements)
+    public static void ReadStructsBlitted<T>(BinaryReader reader, T[] elements) where T : struct
     {
-        int elementSize = Marshal.SizeOf(typeof(T));
-        int bytes = elementSize * elements.Length;
-        byte[] readBuffer = reader.ReadBytes(bytes);
-
-        GCHandle handle = GCHandle.Alloc(elements, GCHandleType.Pinned);
-        var addr = handle.AddrOfPinnedObject();
-        Marshal.Copy(readBuffer, 0, addr, bytes);
-        handle.Free();
+        ReadStructs(reader, elements);
     }
 
-    public static void ReadStructs<T>(MemoryMappedViewAccessor view, long offset, T[] elements)
+    public static void ReadStructs<T>(MemoryMappedViewAccessor view, long offset, T[] elements) where T : struct
     {
-        int elementSize = Marshal.SizeOf(typeof(T));
-        int bytes = elementSize * elements.Length;
-        byte[] readBuffer = new byte[bytes];
-        view.ReadArray<byte>(offset, readBuffer, 0, bytes);
-        GCHandle handle = GCHandle.Alloc(readBuffer, GCHandleType.Pinned);
-        var addr = handle.AddrOfPinnedObject();
-        for (var i = 0; i < elements.Length; i++)
-        {
-            var elementAddr = new IntPtr(addr.ToInt64() + elementSize * i);
-            elements[i] = Marshal.PtrToStructure<T>(elementAddr);
-        }
-        handle.Free();
+        ArgumentNullException.ThrowIfNull(view);
+        ArgumentNullException.ThrowIfNull(elements);
+        int elementSize = Unsafe.SizeOf<T>();
+        int totalBytes = elementSize * elements.Length;
+        byte[] readBuffer = new byte[totalBytes];
+        view.ReadArray(offset, readBuffer, 0, totalBytes);
+
+        Span<byte> sourceSpan = readBuffer;
+        Span<T> targetSpan = elements;
+        MemoryMarshal.Cast<byte, T>(sourceSpan).CopyTo(targetSpan);
     }
 
-    public static void WriteStruct<T>(BinaryWriter writer, ref T inStruct)
+    public static void WriteStruct<T>(BinaryWriter writer, ref T inStruct) where T : struct
     {
-        int count = Marshal.SizeOf(typeof(T));
-        byte[] writeBuffer = new byte[count];
-        GCHandle handle = GCHandle.Alloc(writeBuffer, GCHandleType.Pinned);
-        Marshal.StructureToPtr(inStruct, handle.AddrOfPinnedObject(), true);
-        handle.Free();
-        writer.Write(writeBuffer);
+        ArgumentNullException.ThrowIfNull(writer);
+        ReadOnlySpan<T> structSpan = MemoryMarshal.CreateReadOnlySpan(ref inStruct, 1);
+        ReadOnlySpan<byte> byteSpan = MemoryMarshal.Cast<T, byte>(structSpan);
+        writer.Write(byteSpan);
     }
 
-    public static void WriteStructs<T>(BinaryWriter writer, T[] elements)
+    public static void WriteStructs<T>(BinaryWriter writer, T[] elements) where T : struct
     {
-        int elementSize = Marshal.SizeOf(typeof(T));
-        int bytes = elementSize * elements.Length;
-        byte[] writeBuffer = new byte[bytes];
-        GCHandle handle = GCHandle.Alloc(writeBuffer, GCHandleType.Pinned);
-        var addr = handle.AddrOfPinnedObject();
-        for (var i = 0; i < elements.Length; i++)
-        {
-            var elementAddr = new IntPtr(addr.ToInt64() + elementSize * i);
-            Marshal.StructureToPtr(elements[i], elementAddr, true);
-        }
-        handle.Free();
-        writer.Write(writeBuffer);
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(elements);
+        ReadOnlySpan<byte> byteSpan = MemoryMarshal.Cast<T, byte>(elements);
+        writer.Write(byteSpan);
     }
 
-    public static unsafe String NullTerminatedBytesToString(byte[] b)
+    public static unsafe string NullTerminatedBytesToString(byte[] b)
     {
-        fixed (byte* ptr = b)
-        {
-            return Utf8StringMarshaller.ConvertToManaged(ptr);
-        }
+        ArgumentNullException.ThrowIfNull(b);
+        int len = Array.IndexOf(b, (byte)0);
+        if (len == 0) return string.Empty;
+        if (len < 0) len = b.Length;
+        return Encoding.UTF8.GetString(b, 0, len);
     }
 
-    public static unsafe String NullTerminatedBytesToString(FileNameBlittable b)
+    public static unsafe string NullTerminatedBytesToString(FileNameBlittable b)
     {
-        return Utf8StringMarshaller.ConvertToManaged(&b[0]);
+        ReadOnlySpan<byte> span = MemoryMarshal.CreateReadOnlySpan(ref Unsafe.As<FileNameBlittable, byte>(ref Unsafe.AsRef(in b)), 256);
+        int len = span.IndexOf((byte)0);
+        if (len == 0) return string.Empty;
+        if (len < 0) len = 256;
+        return Encoding.UTF8.GetString(span[..len]);
     }
 
     public static byte[] StringToNullTerminatedBytes(string s, int length)
     {
+        ArgumentNullException.ThrowIfNull(s);
         var b = new byte[length];
         int len = Encoding.UTF8.GetBytes(s, b);
         Array.Clear(b, len, b.Length - len);
@@ -167,49 +157,44 @@ public static class BinUtils
 
     public static FileNameBlittable StringToNullTerminatedBlittableBytes(string s)
     {
+        ArgumentNullException.ThrowIfNull(s);
         var b = new FileNameBlittable();
-        Span<byte> bs = b;
+        Span<byte> bs = MemoryMarshal.CreateSpan(ref Unsafe.As<FileNameBlittable, byte>(ref b), 256);
         int len = Encoding.UTF8.GetBytes(s, bs);
-        bs.Slice(len, 256 - len).Clear();
+        bs[len..].Clear();
         return b;
     }
 
     public static NodeAttribute ReadAttribute(AttributeType type, BinaryReader reader)
     {
+        ArgumentNullException.ThrowIfNull(reader);
         var attr = new NodeAttribute(type);
+
         switch (type)
         {
             case AttributeType.None:
                 break;
-
             case AttributeType.Byte:
                 attr.Value = reader.ReadByte();
                 break;
-
             case AttributeType.Short:
                 attr.Value = reader.ReadInt16();
                 break;
-
             case AttributeType.UShort:
                 attr.Value = reader.ReadUInt16();
                 break;
-
             case AttributeType.Int:
                 attr.Value = reader.ReadInt32();
                 break;
-
             case AttributeType.UInt:
                 attr.Value = reader.ReadUInt32();
                 break;
-
             case AttributeType.Float:
                 attr.Value = reader.ReadSingle();
                 break;
-
             case AttributeType.Double:
                 attr.Value = reader.ReadDouble();
                 break;
-
             case AttributeType.IVec2:
             case AttributeType.IVec3:
             case AttributeType.IVec4:
@@ -221,7 +206,6 @@ public static class BinUtils
                     attr.Value = vec;
                     break;
                 }
-
             case AttributeType.Vec2:
             case AttributeType.Vec3:
             case AttributeType.Vec4:
@@ -233,7 +217,6 @@ public static class BinUtils
                     attr.Value = vec;
                     break;
                 }
-
             case AttributeType.Mat2:
             case AttributeType.Mat3:
             case AttributeType.Mat3x4:
@@ -244,7 +227,6 @@ public static class BinUtils
                     int rows = attr.Type.GetRows();
                     var mat = new Matrix(rows, columns);
                     attr.Value = mat;
-
                     for (int col = 0; col < columns; col++)
                     {
                         for (int row = 0; row < rows; row++)
@@ -254,32 +236,26 @@ public static class BinUtils
                     }
                     break;
                 }
-
             case AttributeType.Bool:
                 attr.Value = reader.ReadByte() != 0;
                 break;
-
             case AttributeType.ULongLong:
                 attr.Value = reader.ReadUInt64();
                 break;
-
             case AttributeType.Long:
             case AttributeType.Int64:
                 attr.Value = reader.ReadInt64();
                 break;
-
             case AttributeType.Int8:
                 attr.Value = reader.ReadSByte();
                 break;
-
             case AttributeType.UUID:
-                attr.Value = new Guid(reader.ReadBytes(16));
+                byte[] bytes = reader.ReadBytes(16);
+                if (bytes.Length < 16) throw new EndOfStreamException();
+                attr.Value = new Guid(bytes);
                 break;
-
             default:
-                // Strings are serialized differently for each file format and should be
-                // handled by the format-specific ReadAttribute()
-                throw new InvalidFormatException(String.Format("ReadAttribute() not implemented for type {0}", type));
+                throw new InvalidFormatException($"ReadAttribute() not implemented for type {type}");
         }
 
         return attr;
@@ -287,97 +263,82 @@ public static class BinUtils
 
     public static void WriteAttribute(BinaryWriter writer, NodeAttribute attr)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(attr);
+
+        object value = attr.Value ?? throw new InvalidDataException($"Attribute value cannot be null for type {attr.Type}.");
+
         switch (attr.Type)
         {
             case AttributeType.None:
                 break;
-
             case AttributeType.Byte:
-                writer.Write((Byte)attr.Value);
+                writer.Write((byte)value);
                 break;
-
             case AttributeType.Short:
-                writer.Write((Int16)attr.Value);
+                writer.Write((short)value);
                 break;
-
             case AttributeType.UShort:
-                writer.Write((UInt16)attr.Value);
+                writer.Write((ushort)value);
                 break;
-
             case AttributeType.Int:
-                writer.Write((Int32)attr.Value);
+                writer.Write((int)value);
                 break;
-
             case AttributeType.UInt:
-                writer.Write((UInt32)attr.Value);
+                writer.Write((uint)value);
                 break;
-
             case AttributeType.Float:
-                writer.Write((float)attr.Value);
+                writer.Write((float)value);
                 break;
-
             case AttributeType.Double:
-                writer.Write((Double)attr.Value);
+                writer.Write((double)value);
                 break;
-
             case AttributeType.IVec2:
             case AttributeType.IVec3:
             case AttributeType.IVec4:
-                foreach (var item in (int[])attr.Value)
-                {
+                foreach (int item in (int[])value)
                     writer.Write(item);
-                }
                 break;
-
             case AttributeType.Vec2:
             case AttributeType.Vec3:
             case AttributeType.Vec4:
-                foreach (var item in (float[])attr.Value)
-                {
+                foreach (float item in (float[])value)
                     writer.Write(item);
-                }
                 break;
-
             case AttributeType.Mat2:
             case AttributeType.Mat3:
             case AttributeType.Mat3x4:
             case AttributeType.Mat4x3:
             case AttributeType.Mat4:
                 {
-                    var mat = (Matrix)attr.Value;
-                    for (int col = 0; col < mat.cols; col++)
+                    var mat = (Matrix)value;
+                    for (int col = 0; col < mat.Cols; col++)
                     {
-                        for (int row = 0; row < mat.rows; row++)
+                        for (int row = 0; row < mat.Rows; row++)
                         {
-                            writer.Write((float)mat[row, col]);
+                            writer.Write(mat[row, col]);
                         }
                     }
                     break;
                 }
-
             case AttributeType.Bool:
-                writer.Write((Byte)((Boolean)attr.Value ? 1 : 0));
+                writer.Write((byte)((bool)value ? 1 : 0));
                 break;
-
             case AttributeType.ULongLong:
-                writer.Write((UInt64)attr.Value);
+                writer.Write((ulong)value);
                 break;
-
             case AttributeType.Long:
             case AttributeType.Int64:
-                writer.Write((Int64)attr.Value);
+                writer.Write((long)value);
                 break;
-
             case AttributeType.Int8:
-                writer.Write((SByte)attr.Value);
+                writer.Write((sbyte)value);
                 break;
-
             case AttributeType.UUID:
-                writer.Write(((Guid)attr.Value).ToByteArray());
+                writer.Write(((Guid)value).ToByteArray());
                 break;
-
             default:
-                throw new InvalidFormatException(String.Format("WriteAttribute() not implemented for type {0}", attr.Type));
+                throw new InvalidFormatException($"WriteAttribute() not implemented for type {attr.Type}");
         }
     }
 }

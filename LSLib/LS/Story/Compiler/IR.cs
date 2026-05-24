@@ -1,5 +1,7 @@
 ﻿using LSLib.LS.Story.GoalParser;
 using LSLib.Parser;
+using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 
 namespace LSLib.LS.Story.Compiler;
 
@@ -8,162 +10,150 @@ namespace LSLib.LS.Story.Compiler;
 /// These are names that were passed on from the AST, but
 /// may not be defined at the time of parsing.
 /// </summary>
-public abstract class IRReference<NameType, ReferencedType>
+public abstract class IRReference<TName, TReferenced>
+    where TName : class
+    where TReferenced : class
 {
-    public NameType Name;
-    protected CompilationContext Context;
+    public TName? Name { get; set; }
+    protected CompilationContext? Context;
 
-    public bool IsNull
-    {
-        get { return Name == null; }
-    }
+    [MemberNotNullWhen(false, nameof(Name))]
+    public bool IsNull => Name is null;
 
-    public bool IsValid
-    {
-        get { return Name != null; }
-    }
+    [MemberNotNullWhen(true, nameof(Name))]
+    public bool IsValid => Name is not null;
 
-    public IRReference()
-    {
-    }
+    protected IRReference() { }
 
-    public IRReference(NameType name)
+    protected IRReference(TName name)
     {
-        Name = name;
+        Name = name ?? throw new ArgumentNullException(nameof(name));
     }
 
     public void Bind(CompilationContext context)
     {
-        if (Context == null)
+        ArgumentNullException.ThrowIfNull(context);
+        if (Context is null)
             Context = context;
         else
             throw new InvalidOperationException("Reference already bound to a compilation context!");
     }
-    
-    abstract public ReferencedType Resolve();
+
+    public abstract TReferenced? Resolve();
 }
 
 /// <summary>
 /// Named reference to a story goal.
 /// </summary>
-public class IRGoalRef : IRReference<String, IRGoal>
+public sealed class IRGoalRef(string name) : IRReference<string, IRGoal>(name)
 {
-    public IRGoalRef(String name)
-        : base(name)
+    public override IRGoal? Resolve()
     {
-    }
-
-    public override IRGoal Resolve()
-    {
-        if (IsNull)
-            return null;
-        else
-            return Context.LookupGoal(Name);
+        if (IsNull || Context is null) return null;
+        return Context.LookupGoal(Name);
     }
 }
 
 /// <summary>
 /// Named reference to a story symbol (proc, query, event).
 /// </summary>
-public class IRSymbolRef : IRReference<FunctionNameAndArity, FunctionSignature>
+public sealed class IRSymbolRef(FunctionNameAndArity name) : IRReference<FunctionNameAndArity, FunctionSignature>(name)
 {
-    public IRSymbolRef(FunctionNameAndArity name)
-        : base(name)
+    public override FunctionSignature? Resolve()
     {
-    }
-
-    public override FunctionSignature Resolve()
-    {
-        if (IsNull)
-            return null;
-        else
-            return Context.LookupSignature(Name);
+        if (IsNull || Context is null) return null;
+        return Context.LookupSignature(Name);
     }
 }
 
 /// <summary>
 /// Goal dependency edge from subgial to parent
 /// </summary>
-public class IRTargetEdge
+public sealed class IRTargetEdge
 {
     // Goal name
-    public IRGoalRef Goal;
+    public IRGoalRef Goal { get; set; } = null!;
     // Location of code reference
-    public CodeLocation Location;
+    public CodeLocation? Location { get; set; }
 }
 
 /// <summary>
 /// Goal node - contains everything from a goal file.
 /// </summary>
-public class IRGoal
+public sealed class IRGoal
 {
     // Goal name (derived from filename)
-    public String Name;
+    public string Name { get; set; } = string.Empty;
     // Facts in the INITSECTION part
-    public List<IRFact> InitSection;
+    public List<IRFact> InitSection { get; set; } = [];
     // List of all production rules (including procs and queries) from the KBSECTION part
-    public List<IRRule> KBSection;
-    // Ffacts in the EXITSECTION part
-    public List<IRFact> ExitSection;
+    public List<IRRule> KBSection { get; set; } = [];
+    // Facts in the EXITSECTION part
+    public List<IRFact> ExitSection { get; set; } = [];
     // Parent goals (if any)
-    public List<IRTargetEdge> ParentTargetEdges;
+    public List<IRTargetEdge> ParentTargetEdges { get; set; } = [];
     // Location of node in source code
-    public CodeLocation Location;
+    public CodeLocation? Location { get; set; }
 }
 
 /// <summary>
 /// Osiris fact statement from the INIT or EXIT section.
 /// </summary>
-public class IRFact
+public sealed class IRFact
 {
     // Database we're inserting into / deleting from
-    public IRSymbolRef Database;
+    public IRSymbolRef? Database { get; set; } = null;
     // Fact negation ("DB_Something(1)" vs. "NOT DB_Something(1)").
-    public bool Not;
+    public bool Not { get; set; }
     // List of values in the fact tuple
-    public List<IRConstant> Elements;
+    public List<IRConstant> Elements { get; set; } = [];
     // Goal that we're completing
-    public IRGoal Goal;
+    public IRGoal? Goal { get; set; }
     // Location of node in source code
-    public CodeLocation Location;
+    public CodeLocation? Location { get; set; }
 }
+
 
 /// <summary>
 /// Describes a production rule in the KB section
 /// </summary>
-public class IRRule
+public sealed class IRRule
 {
-    public IRGoal Goal;
+    public IRGoal? Goal { get; set; }
     // Type of rule (if, proc or query)
-    public RuleType Type;
+    public RuleType Type { get; set; }
     // Conditions/predicates
-    public List<IRCondition> Conditions;
+    public List<IRCondition> Conditions { get; set; } = [];
     // Actions to execute on tuples that satisfy the conditions
-    public List<IRStatement> Actions;
+    public List<IRStatement> Actions { get; set; } = [];
     // Rule-local variables
-    public List<IRRuleVariable> Variables;
+    public List<IRRuleVariable> Variables { get; set; } = [];
     // Rule-local variables by name
-    public Dictionary<String, IRRuleVariable> VariablesByName;
+    // Fix: Using StringComparer.OrdinalIgnoreCase completely bypasses heavy runtime ToLowerInvariant allocations strings cloning
+    public Dictionary<string, IRRuleVariable> VariablesByName { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     // Location of node in source code
-    public CodeLocation Location;
+    public CodeLocation? Location { get; set; }
 
-    public IRRuleVariable FindOrAddVariable(String name, ValueType type)
+    public IRRuleVariable FindOrAddVariable(string name, ValueType type)
     {
-        if (name.Length < 1 || name[0] != '_')
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentNullException.ThrowIfNull(type);
+
+        if (name[0] != '_')
         {
-            throw new ArgumentException("Local variable name must start with an underscore");
+            throw new ArgumentException("Local variable name must start with an underscore", nameof(name));
         }
 
-        IRRuleVariable v = null;
+        IRRuleVariable? v = null;
         // Only resolve the variable if it has a name.
         // Unnamed variables are never resolved by name, and all references are assigned 
         // to a separate variable "slot"
         if (name.Length > 1)
         {
-            VariablesByName.TryGetValue(name.ToLowerInvariant(), out v);
+            VariablesByName.TryGetValue(name, out v);
         }
 
-        if (v == null)
+        if (v is null)
         {
             // Allocate a new variable slot if no variable with the same name exists
             v = new IRRuleVariable
@@ -178,7 +168,7 @@ public class IRRule
 
             if (name.Length > 1)
             {
-                VariablesByName.Add(name.ToLowerInvariant(), v);
+                VariablesByName.Add(name, v);
             }
         }
 
@@ -189,65 +179,62 @@ public class IRRule
 /// <summary>
 /// Rule-level local variable.
 /// </summary>
-public class IRRuleVariable
+public sealed class IRRuleVariable
 {
     // Index of the variable within the rule.
     // Indices start from zero.
-    public Int32 Index;
+    public int Index { get; set; }
     // Local name of the variable.
     // This is only used during compilation and is discarded
     // when emitting the final story file.
-    public String Name;
+    public string Name { get; set; } = string.Empty;
     // Type of the rule variable
-    public ValueType Type;
+    public ValueType Type { get; set; } = null!;
     // Index of condition that first bound this variable
-    public Int32 FirstBindingIndex;
-    // TODO - add inferred type marker!
+    public int FirstBindingIndex { get; set; }
 
     public bool IsUnused()
     {
         return Name.Length == 1;
     }
 }
-
 /// <summary>
 /// Production rule condition/predicate.
 /// </summary>
 public class IRCondition
 {
     // Number of columns in the output tuple of this condition.
-    public Int32 TupleSize;
+    public int TupleSize { get; set; }
     // Location of node in source code
-    public CodeLocation Location;
+    public CodeLocation? Location { get; set; }
 }
 
 /// <summary>
 /// "Function call-like" predicate - a div query, a user query or a database filter.
 /// (i.e. "AND SomeFunc(1, 2)" or "AND NOT SomeFunc(1, 2)")
 /// </summary>
-public class IRFuncCondition : IRCondition
+public sealed class IRFuncCondition : IRCondition
 {
     // Query/Database name
-    // (We don't know yet whether this is a query or a database - this info will only be
-    //  available during phase2 parsing)
-    public IRSymbolRef Func;
+    public IRSymbolRef Func { get; set; } = null!;
     // Condition negation ("AND DB_Something(1)" vs. "AND NOT DB_Something(1)").
-    public bool Not;
+    public bool Not { get; set; }
     // List of query parameters / database tuple columns
-    public List<IRValue> Params;
+    public List<IRValue> Params { get; set; } = [];
 }
+
 
 /// <summary>
 /// Predicate with a binary operator (i.e. "A >= B", "A == B", ...)
 /// </summary>
-public class IRBinaryCondition : IRCondition
+public sealed class IRBinaryCondition : IRCondition
 {
     // Left-hand value
-    public IRValue LValue;
+    public IRValue LValue { get; set; } = null!;
     // Operator
-    public RelOpType Op;
+    public RelOpType Op { get; set; }
     // Right-hand value
-    public IRValue RValue;
+    public IRValue RValue { get; set; } = null!;
 }
 
 /// <summary>
@@ -255,30 +242,30 @@ public class IRBinaryCondition : IRCondition
 /// This is either a builtin PROC call, user PROC call, a database insert/delete operation,
 /// or a goal completion statement.
 /// </summary>
-public class IRStatement
+public sealed class IRStatement
 {
     // Proc/Database name
     // (We don't know yet whether this is a PROC or a DB - this info will only be
     //  available during phase2 parsing)
-    public IRSymbolRef Func;
+    public IRSymbolRef Func { get; set; } = null!;
     // Goal to complete
     // (Reference is empty if this statement doesn't trigger a goal completion)
-    public IRGoal Goal;
+    public IRGoal? Goal { get; set; }
     // Statement negation ("DB_Something(1)" vs. "NOT DB_Something(1)").
-    public bool Not;
+    public bool Not { get; set; }
     // List of PROC parameters / database tuple columns
-    public List<IRValue> Params;
+    public List<IRValue> Params { get; set; } = [];
     // Location of node in source code
-    public CodeLocation Location;
+    public CodeLocation? Location { get; set; }
 }
 
 public class IRValue
 {
     // Type of variable, if specified in the code.
     // (e.g. "(ITEMGUID)_Var")
-    public ValueType Type;
+    public ValueType Type { get; set; } = null!;
     // Location of node in source code
-    public CodeLocation Location;
+    public CodeLocation? Location { get; set; }
 }
 
 /// <summary>
@@ -305,27 +292,28 @@ public class IRConstant : IRValue
     // will be stored with a constant type of "Name". It also doesn't differentiate
     // between INT and INT64 as we don't know the exact Osiris type without contextual
     // type inference, which will happen in later stages.
-    public IRConstantType ValueType;
+    public IRConstantType ValueType { get; set; }
     // Was the type info retrieved from the AST or inferred?
-    public bool InferredType;
+    public bool InferredType { get; set; }
     // Value of this constant if the type is Integer.
-    public Int64 IntegerValue;
+    public long IntegerValue { get; set; }
     // Value of this constant if the type is Float.
-    public Single FloatValue;
+    public float FloatValue { get; set; }
     // Value of this constant if the type is String or Name.
-    public String StringValue;
+    public string StringValue { get; set; } = string.Empty;
+
 
     public override string ToString()
     {
-        switch (ValueType)
+        return ValueType switch
         {
-            case IRConstantType.Unknown: return "(unknown)";
-            case IRConstantType.Integer: return IntegerValue.ToString();
-            case IRConstantType.Float: return FloatValue.ToString();
-            case IRConstantType.String: return "\"" + StringValue + "\"";
-            case IRConstantType.Name: return StringValue;
-            default: return "(unknown type)";
-        }
+            IRConstantType.Unknown => "(unknown)",
+            IRConstantType.Integer => IntegerValue.ToString(CultureInfo.InvariantCulture),
+            IRConstantType.Float => FloatValue.ToString(CultureInfo.InvariantCulture),
+            IRConstantType.String => $"\"{StringValue}\"",
+            IRConstantType.Name => StringValue,
+            _ => "(unknown type)"
+        };
     }
 }
 
@@ -333,8 +321,8 @@ public class IRConstant : IRValue
 /// Rule-local variable name.
 /// (Any variable that begins with an underscore in the IF or THEN part of a rule)
 /// </summary>
-public class IRVariable : IRValue
+public sealed class IRVariable : IRValue
 {
     // Index of variable in the rule variable list
-    public Int32 Index;
+    public int Index { get; set; }
 }

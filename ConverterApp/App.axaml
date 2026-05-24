@@ -1,0 +1,35 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="using:LSTools.DivineGUI"
+             x:DataType="views:App"
+             RequestedThemeVariant="Default">
+
+	<Application.Resources>
+		<ControlTheme x:Key="GroupBoxTheme" TargetType="HeaderedContentControl">
+			<Setter Property="Template">
+				<ControlTemplate>
+					<Border BorderBrush="{DynamicResource SystemControlTransientBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            Padding="4"
+                            Margin="0,4">
+						<Grid RowDefinitions="Auto,*">
+							<ContentPresenter Grid.Row="0"
+                                              Content="{TemplateBinding Header}"
+                                              FontWeight="SemiBold"
+                                              Margin="8,4" />
+							<ContentPresenter Grid.Row="1"
+                                              Content="{TemplateBinding Content}" />
+						</Grid>
+					</Border>
+				</ControlTemplate>
+			</Setter>
+		</ControlTheme>
+	</Application.Resources>
+
+	<Application.Styles>
+		<FluentTheme />
+		<StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml"/>
+	</Application.Styles>
+
+</Application>

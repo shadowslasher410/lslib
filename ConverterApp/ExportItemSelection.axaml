@@ -1,0 +1,59 @@
+<rxui:ReactiveUserControl xmlns="https://github.com/avaloniaui"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         xmlns:views="using:LSTools.DivineGUI"
+	xmlns:i="clr-namespace:Avalonia.Xaml.Interactivity;assembly=Xaml.Behaviors.Avalonia"
+	xmlns:ia="clr-namespace:Avalonia.Xaml.Interactions.Core;assembly=Xaml.Behaviors.Avalonia"
+	xmlns:rxui="clr-namespace:Avalonia.ReactiveUI;assembly=Avalonia.ReactiveUI"
+	x:Class="LSTools.DivineGUI.ExportItemSelection"
+	x:DataType="views:ExportItemSelection">
+
+	<Grid RowDefinitions="*,Auto" Margin="16" RowSpacing="12">
+
+		<DataGrid Grid.Row="0" Name="exportGrid"
+                  ItemsSource="{Binding Items}"
+                  SelectedItem="{Binding SelectedRow}"
+                  AutoGenerateColumns="False"
+                  CanUserResizeColumns="True"
+                  CanUserSortColumns="True"
+                  GridLinesVisibility="All"
+                  SelectionMode="Single"
+                  BorderThickness="1"
+                  BorderBrush="{DynamicResource SystemControlTransientBorderBrush}">
+			<DataGrid.Columns>
+
+				<DataGridTemplateColumn Header="Asset Name" Width="2*">
+					<DataGridTemplateColumn.CellTemplate>
+						<DataTemplate x:DataType="views:ExportItemModel">
+							<TextBlock Text="{Binding Name}" Margin="12,6" VerticalAlignment="Center"/>
+						</DataTemplate>
+					</DataGridTemplateColumn.CellTemplate>
+				</DataGridTemplateColumn>
+
+				<DataGridTemplateColumn Header="Asset Type" Width="1*">
+					<DataGridTemplateColumn.CellTemplate>
+						<DataTemplate x:DataType="views:ExportItemModel">
+							<TextBlock Text="{Binding Type}" Margin="12,6" VerticalAlignment="Center"/>
+						</DataTemplate>
+					</DataGridTemplateColumn.CellTemplate>
+				</DataGridTemplateColumn>
+
+				<DataGridTemplateColumn Header="Export Format" Width="1.5*">
+					<DataGridTemplateColumn.CellTemplate>
+						<DataTemplate x:DataType="views:ExportItemModel">
+							<ComboBox ItemsSource="{Binding AvailableFormats}"
+                                      SelectedItem="{Binding SelectedFormat}"
+                                      HorizontalAlignment="Stretch" Margin="6,2"/>
+						</DataTemplate>
+					</DataGridTemplateColumn.CellTemplate>
+				</DataGridTemplateColumn>
+
+			</DataGrid.Columns>
+		</DataGrid>
+
+		<Grid Grid.Row="1" HorizontalAlignment="Right" ColumnDefinitions="Auto,Auto" ColumnSpacing="8" Margin="0,4,0,0">
+			<Button Grid.Column="0" Content="Cancel" Width="100" />
+			<Button Grid.Column="1" Content="Export Selected" Width="140" Theme="{StaticResource AccentButtonTheme}" />
+		</Grid>
+
+	</Grid>
+</rxui:ReactiveUserControl>

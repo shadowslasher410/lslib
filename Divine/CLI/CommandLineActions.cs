@@ -1,65 +1,42 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
+using Divine.CLI;
 using LSLib.LS;
 using LSLib.LS.Enums;
 
-namespace Divine.CLI;
+namespace LSLib.Divine.CLI;
 
-internal class CommandLineActions
+internal static class CommandLineActions
 {
-    public static string SourcePath;
-    public static string DestinationPath;
-    public static string PackagedFilePath;
-    public static string ConformPath;
-    public static string VTConfigPath;
-    public static string VTRootPath;
+    public static string SourcePath { get; set; } = string.Empty;
+    public static string DestinationPath { get; set; } = string.Empty;
+    public static string PackagedFilePath { get; set; } = string.Empty;
+    public static string? ConformPath { get; set; }
+    public static string VTConfigPath { get; set; } = string.Empty;
+    public static string VTRootPath { get; set; } = string.Empty;
 
-    public static Game Game;
-    public static LogLevel LogLevel;
-    public static ResourceFormat InputFormat;
-    public static ResourceFormat OutputFormat;
-    public static PackageVersion PackageVersion;
-    public static int PackagePriority;
-    public static bool LegacyGuids;
-    public static bool FastBuild;
-    public static bool VTValidate;
-    public static Dictionary<string, bool> GR2Options;
+    public static Game Game { get; set; }
+    public static LogLevel LogLevel { get; set; }
+    public static ResourceFormat InputFormat { get; set; }
+    public static ResourceFormat OutputFormat { get; set; }
+    public static PackageVersion PackageVersion { get; set; }
+    public static int PackagePriority { get; set; }
+    public static bool LegacyGuids { get; set; }
+    public static bool FastBuild { get; set; }
+    public static bool VTValidate { get; set; }
+    public static Dictionary<string, bool> GR2Options { get; set; } = [];
 
-    // TODO: OSI support
+    private static readonly HashSet<string> BatchActions = ["extract-packages", "convert-models", "convert-resources"];
+    private static readonly HashSet<string> GraphicsActions = ["convert-model", "convert-models"];
 
     public static void Run(CommandLineArguments args)
     {
+        ArgumentNullException.ThrowIfNull(args);
         SetUpAndValidate(args);
         Process(args);
     }
 
     private static void SetUpAndValidate(CommandLineArguments args)
     {
-        string[] batchActions =
-        {
-            "extract-packages",
-            "convert-models",
-            "convert-resources"
-        };
-
-        string[] packageActions =
-        {
-            "create-package",
-            "list-package",
-            "extract-single-file",
-            "extract-package",
-            "extract-packages"
-        };
-
-        string[] graphicsActions =
-        {
-            "convert-model",
-            "convert-models"
-        };
-
         LogLevel = CommandLineArguments.GetLogLevelByString(args.LogLevel);
         CommandLineLogger.LogDebug($"Using log level: {LogLevel}");
 
@@ -70,11 +47,11 @@ internal class CommandLineActions
         FastBuild = args.FastBuild;
         VTValidate = args.VTValidate;
 
-        if (batchActions.Any(args.Action.Contains))
+        if (BatchActions.Contains(args.Action))
         {
-            if (args.InputFormat == null || args.OutputFormat == null)
+            if (args.InputFormat is null || args.OutputFormat is null)
             {
-                if (args.InputFormat == null && args.Action != "extract-packages")
+                if (args.InputFormat is null && args.Action != "extract-packages")
                 {
                     CommandLineLogger.LogFatal("Cannot perform batch action without --input-format and --output-format arguments", 1);
                 }
@@ -103,24 +80,24 @@ internal class CommandLineActions
             VTRootPath = TryToValidatePath(args.VTRoot);
         }
 
-        if (graphicsActions.Any(args.Action.Contains))
+        if (GraphicsActions.Contains(args.Action))
         {
             GR2Options = CommandLineArguments.GetGR2Options(args.Options);
 
-            if(LogLevel == LogLevel.DEBUG || LogLevel == LogLevel.ALL)
+            if (LogLevel is LogLevel.DEBUG or LogLevel.ALL)
             {
                 CommandLineLogger.LogDebug("Using graphics options:");
 
-                foreach (KeyValuePair<string, bool> x in GR2Options)
+                foreach (var (key, value) in GR2Options)
                 {
-                    CommandLineLogger.LogDebug($"   {x.Key} = {x.Value}");
+                    CommandLineLogger.LogDebug($"   {key} = {value}");
                 }
-
             }
 
-            if (args.ConformPath != null && args.ConformPath != "")
+            if (args.ConformPath is { Length: > 0 })
             {
                 ConformPath = TryToValidatePath(args.ConformPath);
+
                 if (!Path.Exists(ConformPath))
                 {
                     CommandLineLogger.LogFatal($"Skeleton source GR2 does not exist: {args.ConformPath}", 1);
@@ -129,13 +106,15 @@ internal class CommandLineActions
         }
 
         SourcePath = TryToValidatePath(args.Source);
-        if (args.Action != "list-package" && args.Action != "build-vt")
+
+        if (args.Action is not "list-package" and not "build-vt")
         {
             DestinationPath = TryToValidatePath(args.Destination);
         }
+
         if (args.Action == "extract-single-file")
         {
-            PackagedFilePath = args.PackagedPath;
+            PackagedFilePath = args.PackagedPath ?? string.Empty;
         }
     }
 
@@ -143,9 +122,9 @@ internal class CommandLineActions
     {
         Func<PackagedFileInfo, bool> filter;
 
-        if (args.Expression != null)
+        if (args.Expression is { Length: > 0 })
         {
-            Regex expression = null;
+            Regex? expression = null;
             if (args.UseRegex)
             {
                 try
@@ -159,89 +138,66 @@ internal class CommandLineActions
             }
             else
             {
-                expression = new Regex("^" + Regex.Escape(args.Expression).Replace(@"\*", ".*").Replace(@"\?", ".") + "$", RegexOptions.Singleline | RegexOptions.Compiled);
+                string pattern = $"^{Regex.Escape(args.Expression).Replace(@"\*", ".*").Replace(@"\?", ".")}$";
+                expression = new Regex(pattern, RegexOptions.Singleline | RegexOptions.Compiled);
             }
 
-            filter = obj => obj.Name.Like(expression);
+            filter = obj => expression is not null && obj.Name.Like(expression);
         }
         else
         {
-            filter = obj => true;
+            filter = _ => true;
         }
-        
-	        switch (args.Action)
+
+        switch (args.Action)
         {
             case "create-package":
-            {
                 CommandLinePackageProcessor.Create();
                 break;
-            }
 
             case "extract-package":
-            {
                 CommandLinePackageProcessor.Extract(filter);
                 break;
-            }
 
             case "extract-single-file":
-            {
                 CommandLinePackageProcessor.ExtractSingleFile();
                 break;
-            }
 
             case "list-package":
-            {
                 CommandLinePackageProcessor.ListFiles(filter);
                 break;
-            }
 
             case "convert-model":
-            {
                 CommandLineGR2Processor.UpdateExporterSettings();
                 CommandLineGR2Processor.Convert();
                 break;
-            }
 
             case "convert-resource":
-            {
                 CommandLineDataProcessor.Convert();
                 break;
-                }
 
             case "convert-loca":
-            {
                 CommandLineDataProcessor.ConvertLoca();
                 break;
-            }
 
             case "extract-packages":
-            {
                 CommandLinePackageProcessor.BatchExtract(filter);
                 break;
-            }
 
             case "convert-models":
-            {
                 CommandLineGR2Processor.BatchConvert();
                 break;
-            }
 
             case "convert-resources":
-            {
                 CommandLineDataProcessor.BatchConvert();
                 break;
-            }
 
             case "build-vt":
-            {
                 CommandLineDataProcessor.BuildVirtualTextureSet();
                 break;
-            }
 
             default:
-            {
                 throw new ArgumentException($"Unhandled action: {args.Action}");
-            }
         }
     }
 
@@ -254,24 +210,18 @@ internal class CommandLineActions
             CommandLineLogger.LogFatal($"Cannot parse path from input: {path}", 1);
         }
 
-        Uri uri = null;
-        try
+        if (Uri.TryCreate(path, UriKind.RelativeOrAbsolute, out var uri))
         {
-            Uri.TryCreate(path, UriKind.RelativeOrAbsolute, out uri);
+            if (!Path.IsPathRooted(path) || !uri.IsFile)
+            {
+                CommandLineLogger.LogFatal($"Cannot proceed without absolute path [E2]: {path}", 1);
+            }
         }
-        catch (InvalidOperationException)
+        else
         {
             CommandLineLogger.LogFatal($"Cannot proceed without absolute path [E1]: {path}", 1);
         }
 
-        if (uri != null && (!Path.IsPathRooted(path) || !uri.IsFile))
-        {
-            CommandLineLogger.LogFatal($"Cannot proceed without absolute path [E2]: {path}", 1);
-        }
-
-        // ReSharper disable once AssignNullToNotNullAttribute
-        path = Path.GetFullPath(path);
-
-        return path;
+        return Path.GetFullPath(path);
     }
 }

@@ -1,145 +1,96 @@
-﻿using System.Buffers;
-using System.Collections.Immutable;
+﻿using PhysXTool;
+using System.CommandLine;
 using System.Text;
 
-namespace PhysXTool;
-
-public static class ResourceStrings
+var inputArgument = new Argument<FileInfo>("input")
 {
-    public static string UsageMessage => "Usage: PurePhysXTool <input file path> <output file path>";
-    public static string InitFailureMessage => "CRITICAL: Failed to initialize internal pure C# PhysX engine registries.";
-    public static string InvalidInputMessage => "Invalid input target file. Extension format must be strictly '.bin' or '.xml'.";
-    public static string InvalidOutputMessage => "Invalid output target destination. Extension format must be strictly '.bin' or '.xml'.";
-    public static string DecodeFailureMessage => "Unable to decode physics resource data components from the source file.";
-    public static string SuccessFormatMessage => "SUCCESS: Successfully converted '{0}' -> '{1}'.";
-    public static string DataExceptionFormatMessage => "PIPELINE DATA REJECTION ERROR: {0}";
-    public static string IoExceptionFormatMessage => "PIPELINE FILE SYSTEM CRASH: {0}";
-    public static string AuthExceptionFormatMessage => "PIPELINE FILE ACCESS DENIED: {0}";
-}
+    Description = "Path to the input source file context (.bin or .xml)"
+};
 
-public static class Program
+var outputArgument = new Argument<FileInfo>("output")
 {
-    private const string XmlExtension = ".XML";
-    private const string BinExtension = ".BIN";
+    Description = "Destination path for the compiled output resource payload (.bin or .xml)"
+};
 
-    public static int Main(string[] args)
+var rootCommand = new RootCommand("Osiris Physics Asset Compilation and Transformation Engine Tool")
+{
+    inputArgument,
+    outputArgument
+};
+
+rootCommand.SetAction(parseResult =>
+{
+    FileInfo inputFile = parseResult.GetValue(inputArgument)!;
+    FileInfo outputFile = parseResult.GetValue(outputArgument)!;
+
+    string inputExt = inputFile.Extension.ToLowerInvariant();
+    string outputExt = outputFile.Extension.ToLowerInvariant();
+
+    if (inputExt is not (".bin" or ".xml") || outputExt is not (".bin" or ".xml"))
     {
-        if (args.Length != 2)
-        {
-            Console.WriteLine(ResourceStrings.UsageMessage);
-            return 1;
-        }
-
-        string inputPath = args[0];
-        string outputPath = args[1];
-
-        string inputExt = Path.GetExtension(inputPath).ToUpperInvariant();
-        string outputExt = Path.GetExtension(outputPath).ToUpperInvariant();
-
-        byte[]? rentedOutputBuffer = null;
-
+        var originalColor = Console.ForegroundColor;
         try
         {
-            if (inputExt != BinExtension && inputExt != XmlExtension)
-            {
-                throw new InvalidDataException(ResourceStrings.InvalidInputMessage);
-            }
-            if (outputExt != BinExtension && outputExt != XmlExtension)
-            {
-                throw new InvalidDataException(ResourceStrings.InvalidOutputMessage);
-            }
-
-            bool inputIsXml = inputExt == XmlExtension;
-            bool outputIsXml = outputExt == XmlExtension;
-
-            PhysXConverter converter = new();
-            if (!converter.InitPhysX())
-            {
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine(ResourceStrings.InitFailureMessage);
-                Console.ResetColor();
-                return 1;
-            }
-
-            byte[] inputBytes = File.ReadAllBytes(inputPath);
-            ImmutableArray<IPxBase> collection;
-
-            if (inputIsXml)
-            {
-                int charCount = Encoding.UTF8.GetCharCount(inputBytes);
-                char[] rentedChars = ArrayPool<char>.Shared.Rent(charCount);
-                
-                try
-                {
-                    int totalChars = Encoding.UTF8.GetChars(inputBytes, rentedChars);
-                    ReadOnlySpan<char> charSpanWindow = rentedChars.AsSpan(0, totalChars);
-                    collection = converter.LoadCollectionFromXml(charSpanWindow);
-                }
-                finally
-                {
-                    ArrayPool<char>.Shared.Return(rentedChars, clearArray: true);
-                }
-            }
-            else
-            {
-                collection = converter.LoadCollectionFromBinary(inputBytes);
-            }
-
-            if (collection.IsEmpty)
-            {
-                throw new InvalidDataException(ResourceStrings.DecodeFailureMessage);
-            }
-
-            if (outputIsXml)
-            {
-                converter.SaveCollectionToXml(collection, out rentedOutputBuffer, out int writtenLength);
-                ReadOnlySpan<byte> outputWindow = rentedOutputBuffer.AsSpan(0, writtenLength);
-                using var fileStream = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None);
-                fileStream.Write(outputWindow);
-            }
-            else
-            {
-                converter.SaveCollectionToBinary(collection, out rentedOutputBuffer, out int writtenLength);
-                ReadOnlySpan<byte> outputWindow = rentedOutputBuffer.AsSpan(0, writtenLength);
-                using var fileStream = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None);
-                fileStream.Write(outputWindow);
-            }
-            
-            converter.ShutdownPhysX();
-
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine(ResourceStrings.SuccessFormatMessage, Path.GetFileName(inputPath), Path.GetFileName(outputPath));
-            Console.ResetColor();
-        }
-        catch (InvalidDataException dataEx)
-        {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine(ResourceStrings.DataExceptionFormatMessage, dataEx.Message);
-            Console.ResetColor();
-            return 1;
-        }
-        catch (IOException ioEx)
-        {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine(ResourceStrings.IoExceptionFormatMessage, ioEx.Message);
-            Console.ResetColor();
-            return 1;
-        }
-        catch (UnauthorizedAccessException authEx)
-        {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine(ResourceStrings.AuthExceptionFormatMessage, authEx.Message);
-            Console.ResetColor();
-            return 1;
+            Console.Error.WriteLine("Error: Structural validation failure. Arguments must strictly match format extensions '.bin' or '.xml'.");
         }
         finally
         {
-            if (rentedOutputBuffer is not null)
-            {
-                ArrayPool<byte>.Shared.Return(rentedOutputBuffer, clearArray: true);
-            }
+            Console.ForegroundColor = originalColor;
         }
 
-        return 0;
+        Environment.ExitCode = 1;
+        return;
     }
-}
+
+    try
+    {
+        using var converter = new PhysXConverter();
+        if (!converter.InitPhysX())
+        {
+            Console.Error.WriteLine("Failed to map initialization contexts onto underlying system runtimes.");
+            Environment.ExitCode = 1;
+            return;
+        }
+
+        bool inputIsXml = inputExt == ".xml";
+        bool outputIsXml = outputExt == ".xml";
+
+        Console.WriteLine($"Reading tracking resource file source: {inputFile.FullName}");
+
+        byte[] inputBytes = File.ReadAllBytes(inputFile.FullName);
+
+        PhysicsCollection collection = inputIsXml
+            ? PhysXSaverConverter.LoadCollectionFromXmlString(File.ReadAllText(inputFile.FullName))
+            : converter.LoadCollectionFromBinary(inputBytes);
+
+        Console.WriteLine("Executing transformation pipeline operations...");
+
+        byte[] outputBytes = outputIsXml
+            ? Encoding.UTF8.GetBytes(PhysXSaveConverter.ExportCollectionToXmlString(collection))
+            : converter.SaveCollectionToBinary(collection);
+
+        Console.WriteLine($"Writing transformed asset destination file payload: {outputFile.FullName}");
+        File.WriteAllBytes(outputFile.FullName, outputBytes);
+        converter.ReleaseCollection(collection);
+
+        Console.WriteLine("Pipeline translation task completed successfully.");
+        Environment.ExitCode = 0;
+    }
+    catch (Exception ex)
+    {
+        var originalColor = Console.ForegroundColor;
+        try
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.Error.WriteLine($"Fatal pipeline exception intercepted: {ex.Message}");
+        }
+        finally
+        {
+            Console.ForegroundColor = originalColor;
+        }
+        Environment.ExitCode = 1;
+    }
+});
+
+return rootCommand.Parse(args).Invoke();

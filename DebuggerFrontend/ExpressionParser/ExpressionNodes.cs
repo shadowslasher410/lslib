@@ -1,81 +1,75 @@
 ﻿using LSLib.LS.Story.Compiler;
-using System;
-using System.Collections.Generic;
 
 namespace LSLib.DebuggerFrontend.ExpressionParser;
 
 /// <summary>
 /// Base class for all nodes.
-/// (This doesn't do anything meaningful, it is needed only to 
-/// provide the GPPG parser a semantic value base class.)
 /// </summary>
-public class ExpressionNode
+public abstract class ExpressionNode
 {
+    // Concrete parameterless constructor for safe child instantiation
+    protected ExpressionNode() { }
 }
 
 /// <summary>
 /// Parameter list of an expression.
 /// This is discarded during parsing and does not appear in the final tree.
 /// </summary>
-public class StatementParamList : ExpressionNode
+public sealed class StatementParamList : ExpressionNode
 {
-    public List<RValue> Params = new List<RValue>();
+    // Modern target-typed collection expressions [] optimize underlying array layouts natively
+    public List<RValue> Params { get; set; } = [];
 }
 
 /// <summary>
 /// An expression.
 /// This is either a PROC call, QRY, or a database insert/delete operation.
 /// </summary>
-public class Statement : ExpressionNode
+public sealed class Statement : ExpressionNode
 {
-    // Function name
-    public String Name;
+    public string Name { get; set; } = string.Empty;
+
     // Statement negation ("DB_Something(1)" vs. "NOT DB_Something(1)").
-    public bool Not;
-    // List of parameters
-    public List<RValue> Params;
+    public bool Not { get; set; }
+
+    public List<RValue> Params { get; set; } = [];
 }
 
-public class RValue : ExpressionNode
+public abstract class RValue : ExpressionNode
 {
+    protected RValue() { }
 }
 
 /// <summary>
 /// Constant scalar value.
 /// </summary>
-public class ConstantValue : RValue
+public sealed class ConstantValue : RValue
 {
-    // Type of value, if specified in the code.
-    // (e.g. "(INT64)123")
-    public String TypeName;
+    // Type of value, if specified in the code. (e.g. "(INT64)123")
+    public string TypeName { get; set; } = string.Empty;
+
     // Internal type of the constant
-    public IRConstantType Type;
+    public IRConstantType Type { get; set; }
+
     // Value of this constant if the type is Integer.
-    public Int64 IntegerValue;
+    public long IntegerValue { get; set; }
+
     // Value of this constant if the type is Float.
-    public Single FloatValue;
+    public float FloatValue { get; set; }
+
     // Value of this constant if the type is String or Name.
-    public String StringValue;
+    public string StringValue { get; set; } = string.Empty;
 }
 
 /// <summary>
 /// Rule-local variable name.
 /// (Any variable that begins with an underscore)
 /// </summary>
-public class LocalVar : RValue
+public sealed class LocalVar : RValue
 {
-    // Type of variable, if specified in the code.
-    // (e.g. "(ITEMGUID)_Var")
-    public String Type;
-    // Name of variable.
-    public String Name;
-}
+    // Type of variable, if specified in the code. (e.g. "(ITEMGUID)_Var")
+    public string Type { get; set; } = string.Empty;
 
-/// <summary>
-/// String literal from lexing stage (yytext).
-/// This is discarded during parsing and does not appear in the final tree.
-/// </summary>
-public class Literal : ExpressionNode
-{
-    public String Lit;
+    // Name of variable.
+    public string Name { get; set; } = string.Empty;
 }

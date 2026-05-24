@@ -6,4 +6,4 @@ public enum ResourceFormat
     LSB,
     LSF,
     LSJ
-};
+}

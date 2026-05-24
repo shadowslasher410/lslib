@@ -1,114 +1,119 @@
-﻿using LSLib.Rcon.Packets;
-using System;
-using System.Collections.Generic;
-using System.IO;
+﻿using System.Buffers;
+using System.Collections.Concurrent;
 using System.Net;
 
 namespace LSLib.Rcon;
 
-public class SplitPacket
+public sealed class SplitPacket
 {
-    public UInt16 Index;
-    public UInt32 Available;
-    public byte[][] Buffers;
+    public ushort Index { get; set; }
+    public uint Available { get; set; }
+    public byte[][] Buffers { get; set; } = [];
 }
 
-public class RakNetSession
+public sealed partial class RakNetSession(RakNetSocket socket, IPEndPoint address, byte[] clientId)
 {
-    private RakNetSocket Socket;
-    private IPEndPoint Address;
-    private byte[] ClientId;
+    private readonly RakNetSocket _socket = socket ?? throw new ArgumentNullException(nameof(socket));
+    private readonly IPEndPoint _address = address ?? throw new ArgumentNullException(nameof(address));
+    private readonly byte[] _clientId = clientId ?? throw new ArgumentNullException(nameof(clientId));
 
-    private UInt32 NextPacketId = 0;
-    private UInt32 NextReliableId = 0;
-    private UInt32 NextSequenceId = 0;
-    private UInt32 NextOrderId = 0;
-    private Dictionary<UInt16, SplitPacket> Splits;
+    private uint _nextPacketId;
+    private uint _nextReliableId;
+    private uint _nextSequenceId;
+    private uint _nextOrderId;
 
-    public delegate Packet PacketConstructorDelegate(Byte id);
-    public PacketConstructorDelegate PacketConstructor = delegate { return null; };
+    private readonly ConcurrentDictionary<ushort, SplitPacket> _splits = new();
+    private readonly ConcurrentDictionary<uint, DataPacket> _pendingAcknowledgements = new();
 
-    public delegate void PacketReceivedDelegate(RakNetSession session, Packet packet);
-    public PacketReceivedDelegate PacketReceived = delegate { };
-
-    public delegate void SessionDisconnectedDelegate(RakNetSession session);
-    public SessionDisconnectedDelegate SessionDisconnected = delegate { };
-
-    public RakNetSession(RakNetSocket Socket, IPEndPoint Address, byte[] ClientId)
-    {
-        this.Socket = Socket;
-        this.Address = Address;
-        this.ClientId = ClientId;
-        Splits = new Dictionary<UInt16, SplitPacket>();
-    }
+    public Func<byte, IPacket?> PacketConstructor { get; set; } = _ => null;
+    public event Action<RakNetSession, IPacket> PacketReceived = delegate { };
+    public event Action<RakNetSession> SessionDisconnected = delegate { };
 
     private void HandleConnectedPing(ConnectedPing packet)
     {
-        var pong = new ConnectedPong();
-        pong.ReceiveTime = packet.SendTime;
-        pong.SendTime = packet.SendTime;
+        var pong = new ConnectedPong
+        {
+            ReceiveTime = packet.SendTime,
+            SendTime = packet.SendTime
+        };
         SendEncapsulated(pong, EncapsulatedReliability.Unreliable);
     }
 
     private void HandleConnectionRequestAccepted(ConnectionRequestAccepted packet)
     {
+#if DEBUG
+        Console.WriteLine($"Connection handshake accepted by remote host. Payload length verified: {packet.Payload.Length} bytes.");
+#endif
+
         var ackReq = new NewIncomingConnection();
         SendEncapsulated(ackReq, EncapsulatedReliability.ReliableOrdered);
     }
 
-    private void HandleDisconnectionNotification(DisconnectionNotification packet)
+    private void HandleDisconnectionNotification(IPacket? packet)
     {
-        SessionDisconnected(this);
+        if (packet is null) return;
+
+#if DEBUG
+        Console.WriteLine("Server gracefully requested termination. Dispatching localized session teardown events.");
+#endif
+
+        SessionDisconnected?.Invoke(this);
     }
 
-    private void HandleEncapsulatedPayload(byte[] payload)
+    private void HandleEncapsulatedPayload(ReadOnlySpan<byte> payload)
     {
-        using (var encapMemory = new MemoryStream(payload))
-        using (var encapStream = new BinaryReaderBE(encapMemory))
-        {
-            var encapId = encapStream.ReadByte();
-            HandlePacketDecapsulated(encapId, encapStream);
-        }
+        using var encapMemory = new MemoryStream(payload.ToArray());
+        using var encapStream = new BinaryReaderBE(encapMemory);
+        byte encapId = encapStream.ReadByte();
+        HandlePacketDecapsulated(encapId, encapStream);
     }
 
     private void HandleSplitPacket(EncapsulatedPacket packet)
     {
-        SplitPacket split = null;
-        if (!Splits.TryGetValue(packet.SplitId, out split))
+        var split = _splits.GetOrAdd(packet.SplitId, id => new SplitPacket
         {
-            split = new SplitPacket();
-            split.Index = packet.SplitId;
-            split.Available = 0;
-            split.Buffers = new byte[packet.SplitCount][];
-            Splits.Add(packet.SplitId, split);
-        }
+            Index = id,
+            Available = 0,
+            Buffers = new byte[packet.SplitCount][]
+        });
 
         if (split.Buffers.Length != packet.SplitCount)
         {
-            throw new InvalidDataException("Packet split count mismatch");
+            throw new InvalidDataException("Packet transmission validation failure: Split chunk count mismatch.");
         }
 
-        if (split.Buffers[packet.SplitIndex] != null)
-        {
-            return;
-        }
+        if (split.Buffers[packet.SplitIndex] is not null) return;
 
         split.Buffers[packet.SplitIndex] = packet.Payload;
         split.Available++;
 
-        if (split.Available == split.Buffers.Length)
+        if (split.Available == (uint)split.Buffers.Length)
         {
-            Splits.Remove(split.Index);
-            using (var memory = new MemoryStream())
-            using (var stream = new BinaryWriter(memory))
+            _splits.TryRemove(split.Index, out _);
+
+            int totalRequiredPayloadSize = 0;
+            foreach (var buffer in split.Buffers)
             {
-                foreach (var buffer in split.Buffers)
+                totalRequiredPayloadSize += buffer.Length;
+            }
+
+            byte[] serializationBuffer = ArrayPool<byte>.Shared.Rent(totalRequiredPayloadSize);
+            try
+            {
+                var destinationSpan = serializationBuffer.AsSpan(0, totalRequiredPayloadSize);
+                int structuralOffsetTracker = 0;
+
+                foreach (byte[] chunk in split.Buffers)
                 {
-                    stream.Write(buffer);
+                    chunk.AsSpan().CopyTo(destinationSpan[structuralOffsetTracker..]);
+                    structuralOffsetTracker += chunk.Length;
                 }
 
-                memory.SetLength(memory.Position);
-                HandleEncapsulatedPayload(memory.ToArray());
+                HandleEncapsulatedPayload(destinationSpan);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(serializationBuffer);
             }
         }
     }
@@ -117,9 +122,9 @@ public class RakNetSession
     {
         var ack = new Acknowledgement
         {
-            SequenceNumbers = new List<SequenceNumber> { sequence }
+            SequenceNumbers = [sequence]
         };
-        Socket.Send(Address, ack);
+        _socket.Send(_address, ack);
     }
 
     private void HandleEncapsulatedPacket(DataPacket data, EncapsulatedPacket packet)
@@ -130,7 +135,7 @@ public class RakNetSession
         }
         else
         {
-            HandleEncapsulatedPayload(packet.Payload);
+            HandleEncapsulatedPayload(packet.Payload.AsSpan());
         }
 
         if (packet.Flags.IsReliable())
@@ -139,114 +144,118 @@ public class RakNetSession
         }
     }
 
-    private void HandlePacketDecapsulated(Byte id, BinaryReaderBE reader)
+    private void HandlePacketDecapsulated(byte id, BinaryReaderBE reader)
     {
         var packet = DecodePacketDecapsulated(id, reader);
 
-        if (packet is ConnectedPing)
+        switch (packet)
         {
-            HandleConnectedPing(packet as ConnectedPing);
-        }
-        else if (packet is ConnectionRequestAccepted)
-        {
-            HandleConnectionRequestAccepted(packet as ConnectionRequestAccepted);
-        }
-        else if (packet is DisconnectionNotification)
-        {
-            HandleDisconnectionNotification(packet as DisconnectionNotification);
-        }
-        else if (id >= 0x80)
-        {
-            PacketReceived(this, packet);
-        }
-        else
-        {
-            throw new Exception("Unhandled encapsulated packet");
+            case ConnectedPing ping:
+                HandleConnectedPing(ping);
+                break;
+            case ConnectionRequestAccepted accepted:
+                HandleConnectionRequestAccepted(accepted);
+                break;
+            case DisconnectionNotification:
+                HandleDisconnectionNotification(packet);
+                break;
+            default:
+                if (id >= 0x80 && packet is not null)
+                {
+                    PacketReceived?.Invoke(this, packet);
+                }
+                else if (packet is null)
+                {
+                    throw new InvalidDataException($"Handshake verification failed: Decoded packet payload at ID 0x{id:X2} resolved to null.");
+                }
+                else
+                {
+                    throw new InvalidDataException($"Unhandled internal encapsulated packet tracking registration ID: 0x{id:X2}");
+                }
+                break;
         }
     }
 
-    public void HandlePacket(Byte id, BinaryReaderBE reader)
+    public void HandlePacket(byte id, BinaryReaderBE reader)
     {
         var packet = DecodePacket(id, reader);
 
-        if (packet is Acknowledgement)
+        switch (packet)
         {
-            // TODO - ACK mechanism not handled
-        }
-        else if (packet is DataPacket)
-        {
-            var encap = (packet as DataPacket).WrappedPacket as EncapsulatedPacket;
-            HandleEncapsulatedPacket(packet as DataPacket, encap);
-        }
-        else
-        {
-            throw new Exception("Unhandled packet");
-        }
-    }
-
-    private Packet DecodePacket(Byte id, BinaryReaderBE reader)
-    {
-        Packet packet = null;
-        if (id >= 0x80 && id < 0xA0)
-        {
-            var dataPkt = new DataPacket();
-            dataPkt.WrappedPacket = new EncapsulatedPacket();
-            packet = dataPkt;
-        }
-        else
-        {
-            switch ((PacketId)id)
-            {
-                case PacketId.ACK: packet = new Acknowledgement(); break;
-                default: throw new InvalidDataException("Unrecognized packet ID");
-            }
-        }
-
-        packet.Read(reader);
-        return packet;
-    }
-
-    private Packet DecodePacketDecapsulated(Byte id, BinaryReaderBE reader)
-    {
-        Packet packet = null;
-        switch ((PacketId)id)
-        {
-            case PacketId.ConnectedPing: packet = new ConnectedPing(); break;
-            case PacketId.ConnectionRequest: packet = new ConnectionRequest(); break;
-            case PacketId.ConnectionRequestAccepted: packet = new ConnectionRequestAccepted(); break;
-            case PacketId.DisconnectionNotification: packet = new DisconnectionNotification(); break;
-            default:
-                packet = PacketConstructor(id);
-                if (packet == null) throw new InvalidDataException("Unrecognized encapsulated packet ID");
+            case Acknowledgement ack:
+                foreach (var sequence in ack.SequenceNumbers)
+                {
+                    _pendingAcknowledgements.TryRemove(sequence.Number, out _);
+                }
                 break;
+
+            case DataPacket data when data.WrappedPacket is EncapsulatedPacket encap:
+                HandleEncapsulatedPacket(data, encap);
+                break;
+
+            default:
+                throw new InvalidDataException($"Unhandled raw session packet sequence registration target ID: 0x{id:X2}");
         }
+    }
+
+    private static IPacket DecodePacket(byte id, BinaryReaderBE reader)
+    {
+        IPacket packet = (id >= 0x80 && id < 0xA0)
+            ? new DataPacket { WrappedPacket = new EncapsulatedPacket() }
+            : (PacketId)id switch
+            {
+                PacketId.ACK => new Acknowledgement(),
+                _ => throw new InvalidDataException($"Unrecognized root packet ID framework specification moniker: 0x{id:X2}")
+            };
 
         packet.Read(reader);
         return packet;
     }
 
-    public void SendEncapsulated(Packet packet, EncapsulatedReliability reliability)
+    private IPacket DecodePacketDecapsulated(byte id, BinaryReaderBE reader)
     {
-        var dataPkt = new DataPacket();
-        dataPkt.Id = (byte)PacketId.EncapsulatedData;
-        dataPkt.Sequence.Number = NextPacketId++;
+        IPacket packet = (PacketId)id switch
+        {
+            PacketId.ConnectedPing => new ConnectedPing(),
+            PacketId.ConnectionRequest => new ConnectionRequest(),
+            PacketId.ConnectionRequestAccepted => new ConnectionRequestAccepted(),
+            PacketId.DisconnectionNotification => new DisconnectionNotification(),
+            _ => PacketConstructor(id) ?? throw new InvalidDataException($"Unrecognized nested unencapsulated packet schema mapping code: 0x{id:X2}")
+        };
 
-        var encapPkt = new EncapsulatedPacket();
-        encapPkt.Flags.Reliability = reliability;
+        packet.Read(reader);
+        return packet;
+    }
+
+    public void SendEncapsulated(IPacket packet, EncapsulatedReliability reliability)
+    {
+        uint currentPacketSequenceId = _nextPacketId++;
+
+        var dataPkt = new DataPacket
+        {
+            Id = (byte)PacketId.EncapsulatedData,
+            Sequence = new SequenceNumber { Number = currentPacketSequenceId }
+        };
+
+        var encapPkt = new EncapsulatedPacket
+        {
+            Flags = new EncapsulatedFlags { Reliability = reliability }
+        };
+
         if (encapPkt.Flags.IsReliable())
         {
-            encapPkt.MessageIndex.Number = NextReliableId++;
+            encapPkt.MessageIndex = new SequenceNumber { Number = _nextReliableId++ };
         }
 
         if (encapPkt.Flags.IsSequenced())
         {
-            encapPkt.SequenceIndex.Number = NextSequenceId++;
+            encapPkt.SequenceIndex = new SequenceNumber { Number = _nextSequenceId++ };
         }
 
         if (encapPkt.Flags.IsSequenced() || encapPkt.Flags.IsOrdered())
         {
             encapPkt.OrderChannel = 0;
-            encapPkt.OrderIndex.Number = NextOrderId++;
+            encapPkt.OrderIndex = new SequenceNumber { Number = _nextOrderId++ };
         }
 
         using (var memory = new MemoryStream())
@@ -255,22 +264,30 @@ public class RakNetSession
             packet.Write(stream);
             memory.SetLength(memory.Position);
             encapPkt.Payload = memory.ToArray();
-            encapPkt.Length = (UInt16)(encapPkt.Payload.Length * 8);
+            encapPkt.Length = (ushort)encapPkt.Payload.Length;
         }
 
         dataPkt.WrappedPacket = encapPkt;
-        Socket.Send(Address, dataPkt);
+
+        if (encapPkt.Flags.IsReliable())
+        {
+            _pendingAcknowledgements[currentPacketSequenceId] = dataPkt;
+        }
+
+        _socket.Send(_address, dataPkt);
     }
 
     public void OnConnected()
     {
-        var currentTimestamp = (UInt32)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, 0)).TotalSeconds;
+        uint currentTimestamp = (uint)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
         var connReq = new ConnectionRequest
         {
-            ClientId = ClientId,
+            ClientId = _clientId,
             Time = currentTimestamp,
             Security = 0
         };
-        SendEncapsulated(connReq, EncapsulatedReliability.Reliable);
+
+        SendEncapsulated(connReq, EncapsulatedReliability.ReliableOrdered);
     }
 }

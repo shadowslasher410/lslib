@@ -1,122 +1,138 @@
 ﻿
 namespace LSLib.LS.Story.Compiler;
 
-public class DatabaseDebugInfo
+public sealed class DatabaseDebugInfo
 {
     // ID of database in generated story file
-    public UInt32 Id;
-    public String Name;
-    public List<UInt32> ParamTypes;
+    public uint Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public List<uint> ParamTypes { get; set; } = [];
 }
 
-public class ActionDebugInfo
+public sealed class ActionDebugInfo
 {
     // Location of action in source file
-    public UInt32 Line;
+    public uint Line { get; set; }
 }
 
 public class GoalDebugInfo
 {
     // ID of goal in generated story file
-    public UInt32 Id;
+    public uint Id { get; set; }
     // Goal name
-    public String Name;
+    public string Name { get; set; } = string.Empty;
     // Absolute path of goal source file
-    public String Path;
+    public string Path { get; set; } = string.Empty;
     // Actions in INIT section
-    public List<ActionDebugInfo> InitActions;
+    public List<ActionDebugInfo> InitActions { get; set; } = [];
     // Actions in EXIT section
-    public List<ActionDebugInfo> ExitActions;
+    public List<ActionDebugInfo> ExitActions { get; set; } = [];
 }
 
 public class RuleVariableDebugInfo
 {
     // Index of rule variable in local tuple
-    public UInt32 Index;
+    public uint Index { get; set; }
     // Name of rule variable
-    public String Name;
+    public string Name { get; set; } = string.Empty;
     // Type ID of rule variable
-    public UInt32 Type;
+    public uint Type { get; set; }
     // Is the variable slot unused? (i.e. not bound to a physical column)
-    public bool Unused;
+    public bool Unused { get; set; }
 }
 
 public class RuleDebugInfo
 {
-    // Local index of rule
-    // (this is not stored in the story file and is only used by the debugger)
-    public UInt32 Id;
+    // Local index of rule (this is not stored in the story file and is only used by the debugger)
+    public uint Id { get; set; }
     // ID of parent goal node
-    public UInt32 GoalId;
+    public uint GoalId { get; set; }
     // Generated rule name (usually the name of the first condition)
-    public String Name;
+    public string Name { get; set; } = string.Empty;
     // Rule local variables
-    public List<RuleVariableDebugInfo> Variables;
+    public List<RuleVariableDebugInfo> Variables { get; set; } = [];
     // Actions in THEN-part
-    public List<ActionDebugInfo> Actions;
+    public List<ActionDebugInfo> Actions { get; set; } = [];
+
     // Line number of the beginning of the "IF" section
-    public UInt32 ConditionsStartLine;
+    public uint ConditionsStartLine { get; set; }
+
     // Line number of the end of the "IF" section
-    public UInt32 ConditionsEndLine;
+    public uint ConditionsEndLine { get; set; }
+
     // Line number of the beginning of the "THEN" section
-    public UInt32 ActionsStartLine;
+    public uint ActionsStartLine { get; set; }
+
     // Line number of the end of the "THEN" section
-    public UInt32 ActionsEndLine;
+    public uint ActionsEndLine { get; set; }
 }
 
-public class NodeDebugInfo
+public sealed class NodeDebugInfo
 {
     // ID of node in generated story file
-    public UInt32 Id;
+    public uint Id { get; set; }
+
     // Index of parent rule
-    public UInt32 RuleId;
+    public uint RuleId { get; set; }
+
     // Location of action in source file
-    public Int32 Line;
+    public int Line { get; set; }
+
     // Local tuple to rule variable index mappings
-    public Dictionary<Int32, Int32> ColumnToVariableMaps;
+    public Dictionary<int, int> ColumnToVariableMaps { get; set; } = [];
+
     // ID of associated database node
-    public UInt32 DatabaseId;
+    public uint DatabaseId { get; set; }
+
     // Name of node
-    public String Name;
+    public string Name { get; set; } = string.Empty;
+
     // Type of node
-    public Node.Type Type;
+    public Node.Type Type { get; set; }
+
     // ID of left parent node
-    public UInt32 ParentNodeId;
+    public uint ParentNodeId { get; set; }
+
     // Function (query, proc, etc.) attached to this node
-    public FunctionNameAndArity FunctionName;
+    public FunctionNameAndArity? FunctionName { get; set; }
 }
 
-public class FunctionParamDebugInfo
+public sealed class FunctionParamDebugInfo
 {
     // Intrinsic type ID
-    public UInt32 TypeId;
+    public uint TypeId { get; set; }
+
     // Name of parameter
-    public String Name;
+    public string Name { get; set; } = string.Empty;
+
     // Is an out param (ie. return value)?
-    public bool Out;
+    public bool Out { get; set; }
 }
 
-public class FunctionDebugInfo
+
+public sealed class FunctionDebugInfo
 {
     // Name of function
-    public String Name;
+    public string Name { get; set; } = string.Empty;
+    
     // Type of node
-    public List<FunctionParamDebugInfo> Params;
+    public List<FunctionParamDebugInfo> Params { get; set; } = [];
+    
     // Function type ID
-    public UInt32 TypeId;
+    public uint TypeId { get; set; }
 }
 
-public class StoryDebugInfo
+public sealed class StoryDebugInfo
 {
     /// <summary>
     /// Story debug info format version. Increment each time the format changes.
     /// </summary>
-    public const UInt32 CurrentVersion = 2;
+    public const uint CurrentVersion = 2;
 
-    public UInt32 Version;
-    public Dictionary<UInt32, DatabaseDebugInfo> Databases = new Dictionary<UInt32, DatabaseDebugInfo>();
-    public Dictionary<UInt32, GoalDebugInfo> Goals = new Dictionary<UInt32, GoalDebugInfo>();
-    public Dictionary<UInt32, RuleDebugInfo> Rules = new Dictionary<UInt32, RuleDebugInfo>();
-    public Dictionary<UInt32, NodeDebugInfo> Nodes = new Dictionary<UInt32, NodeDebugInfo>();
-    public Dictionary<FunctionNameAndArity, FunctionDebugInfo> Functions = new Dictionary<FunctionNameAndArity, FunctionDebugInfo>();
+    public uint Version { get; set; } = CurrentVersion;
+    public Dictionary<uint, DatabaseDebugInfo> Databases { get; set; } = [];
+    public Dictionary<uint, GoalDebugInfo> Goals { get; set; } = [];
+    public Dictionary<uint, RuleDebugInfo> Rules { get; set; } = [];
+    public Dictionary<uint, NodeDebugInfo> Nodes { get; set; } = [];
+    public Dictionary<FunctionNameAndArity, FunctionDebugInfo> Functions { get; set; } = [];
 }

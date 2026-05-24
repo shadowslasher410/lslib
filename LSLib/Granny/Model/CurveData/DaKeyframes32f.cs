@@ -3,43 +3,45 @@ using LSLib.Granny.GR2;
 
 namespace LSLib.Granny.Model.CurveData;
 
-public class DaKeyframes32f : AnimationCurveData
+public sealed class DaKeyframes32f : AnimationCurveData
 {
-    [Serialization(Type = MemberType.Inline)]
-    public CurveDataHeader CurveDataHeader_DaKeyframes32f;
-    public Int16 Dimension;
-    [Serialization(Prototype = typeof(ControlReal32), Kind = SerializationKind.UserMember, Serializer = typeof(SingleListSerializer))]
-    public List<Single> Controls;
+    [field: Serialization(Type = MemberType.Inline)]
+    public CurveDataHeader CurveDataHeader_DaKeyframes32f { get; set; } = new();
 
-    public ExportType CurveType()
+    public short Dimension { get; set; }
+
+    [field: Serialization(Prototype = typeof(ControlReal32), Kind = SerializationKind.UserMember, Serializer = typeof(SingleListSerializer))]
+    public List<float> Controls { get; set; } = [];
+
+    public ExportType CurveType() => Dimension switch
     {
-        if (Dimension == 3)
-            return ExportType.Position;
-        else if (Dimension == 4)
-            return ExportType.Rotation;
-        else if (Dimension == 9)
-            return ExportType.ScaleShear;
-        else
-            throw new NotSupportedException("Unsupported DaKeyframes32f dimension number");
-    }
+        3 => ExportType.Position,
+        4 => ExportType.Rotation,
+        9 => ExportType.ScaleShear,
+        _ => throw new NotSupportedException($"Unsupported DaKeyframes32f dimension parameter mapping configuration: {Dimension}")
+    };
 
     public override int NumKnots()
     {
+        if (Dimension <= 0) return 0;
         return Controls.Count / Dimension;
     }
 
     public override List<float> GetKnots()
     {
-        var knots = new List<float>(NumKnots());
-        for (var i = 0; i < NumKnots(); i++)
-            knots.Add((float)i);
-
+        int numKnots = NumKnots();
+        var knots = new List<float>(numKnots);
+        for (int i = 0; i < numKnots; i++)
+        {
+            knots.Add(i);
+        }
         return knots;
     }
 
-    public void SetKnots(List<float> knots)
+    public static void SetKnots(List<float> knots)
     {
-        throw new NotSupportedException("Knots are fixed for DaKeyframes32f curves");
+        _ = knots;
+        throw new NotSupportedException("Knots are uniformly fixed to integer frames indices for DaKeyframes32f curves.");
     }
 
     public override List<Vector3> GetPoints()
@@ -47,16 +49,17 @@ public class DaKeyframes32f : AnimationCurveData
         if (CurveType() != ExportType.Position)
             throw new InvalidOperationException("DaKeyframes32f: This curve is not a position curve!");
 
-        var numKnots = NumKnots();
+        int numKnots = NumKnots();
         var positions = new List<Vector3>(numKnots);
-        for (var i = 0; i < numKnots; i++)
+
+        ReadOnlySpan<float> ctrlSpan = CollectionsMarshal.AsSpan(Controls);
+
+        for (int i = 0; i < numKnots; i++)
         {
-            var vec = new Vector3(
-                Controls[i * 3 + 0],
-                Controls[i * 3 + 1],
-                Controls[i * 3 + 2]
-            );
-            positions.Add(vec);
+            int baseIdx = i * 3;
+            if (baseIdx + 2 >= ctrlSpan.Length) break;
+
+            positions.Add(new Vector3(ctrlSpan[baseIdx + 0], ctrlSpan[baseIdx + 1], ctrlSpan[baseIdx + 2]));
         }
 
         return positions;
@@ -64,7 +67,18 @@ public class DaKeyframes32f : AnimationCurveData
 
     public void SetPoints(List<Vector3> points)
     {
-        Controls = points.SelectMany(p => new float[] { p.X, p.Y, p.Z }).ToList();
+        ArgumentNullException.ThrowIfNull(points);
+
+        Controls = new List<float>(points.Count * 3);
+        ReadOnlySpan<Vector3> ptsSpan = CollectionsMarshal.AsSpan(points);
+
+        for (int i = 0; i < ptsSpan.Length; i++)
+        {
+            var p = ptsSpan[i];
+            Controls.Add(p.X);
+            Controls.Add(p.Y);
+            Controls.Add(p.Z);
+        }
     }
 
     public override List<Matrix3> GetMatrices()
@@ -72,22 +86,20 @@ public class DaKeyframes32f : AnimationCurveData
         if (CurveType() != ExportType.ScaleShear)
             throw new InvalidOperationException("DaKeyframes32f: This curve is not a scale/shear curve!");
 
-        var numKnots = NumKnots();
+        int numKnots = NumKnots();
         var scaleShear = new List<Matrix3>(numKnots);
-        for (var i = 0; i < numKnots; i++)
+        ReadOnlySpan<float> ctrlSpan = CollectionsMarshal.AsSpan(Controls);
+
+        for (int i = 0; i < numKnots; i++)
         {
-            var mat = new Matrix3(
-                Controls[i * 9 + 0],
-                Controls[i * 9 + 1],
-                Controls[i * 9 + 2],
-                Controls[i * 9 + 3],
-                Controls[i * 9 + 4],
-                Controls[i * 9 + 5],
-                Controls[i * 9 + 6],
-                Controls[i * 9 + 7],
-                Controls[i * 9 + 8]
-            );
-            scaleShear.Add(mat);
+            int baseIdx = i * 9;
+            if (baseIdx + 8 >= ctrlSpan.Length) break;
+
+            scaleShear.Add(new Matrix3(
+                ctrlSpan[baseIdx + 0], ctrlSpan[baseIdx + 1], ctrlSpan[baseIdx + 2],
+                ctrlSpan[baseIdx + 3], ctrlSpan[baseIdx + 4], ctrlSpan[baseIdx + 5],
+                ctrlSpan[baseIdx + 6], ctrlSpan[baseIdx + 7], ctrlSpan[baseIdx + 8]
+            ));
         }
 
         return scaleShear;
@@ -95,11 +107,18 @@ public class DaKeyframes32f : AnimationCurveData
 
     public void SetMatrices(List<Matrix3> matrices)
     {
-        Controls = matrices.SelectMany(m => new float[] {
-            m[0, 0],  m[0, 1], m[0, 2],
-            m[1, 0],  m[1, 1], m[1, 2],
-            m[2, 0],  m[2, 1], m[2, 2]
-        }).ToList();
+        ArgumentNullException.ThrowIfNull(matrices);
+
+        Controls = new List<float>(matrices.Count * 9);
+        ReadOnlySpan<Matrix3> matsSpan = CollectionsMarshal.AsSpan(matrices);
+
+        for (int i = 0; i < matsSpan.Length; i++)
+        {
+            var m = matsSpan[i];
+            Controls.Add(m[0, 0]); Controls.Add(m[0, 1]); Controls.Add(m[0, 2]);
+            Controls.Add(m[1, 0]); Controls.Add(m[1, 1]); Controls.Add(m[1, 2]);
+            Controls.Add(m[2, 0]); Controls.Add(m[2, 1]); Controls.Add(m[2, 2]);
+        }
     }
 
     public override List<Quaternion> GetQuaternions()
@@ -107,17 +126,21 @@ public class DaKeyframes32f : AnimationCurveData
         if (CurveType() != ExportType.Rotation)
             throw new InvalidOperationException("DaKeyframes32f: This curve is not a rotation curve!");
 
-        var numKnots = NumKnots();
+        int numKnots = NumKnots();
         var rotations = new List<Quaternion>(numKnots);
-        for (var i = 0; i < numKnots; i++)
+        ReadOnlySpan<float> ctrlSpan = CollectionsMarshal.AsSpan(Controls);
+
+        for (int i = 0; i < numKnots; i++)
         {
-            var quat = new Quaternion(
-                Controls[i * 4 + 0],
-                Controls[i * 4 + 1],
-                Controls[i * 4 + 2],
-                Controls[i * 4 + 3]
-            );
-            rotations.Add(quat);
+            int baseIdx = i * 4;
+            if (baseIdx + 3 >= ctrlSpan.Length) break;
+
+            rotations.Add(new Quaternion(
+                ctrlSpan[baseIdx + 0],
+                ctrlSpan[baseIdx + 1],
+                ctrlSpan[baseIdx + 2],
+                ctrlSpan[baseIdx + 3]
+            ));
         }
 
         return rotations;
@@ -125,6 +148,18 @@ public class DaKeyframes32f : AnimationCurveData
 
     public void SetQuaternions(List<Quaternion> quats)
     {
-        Controls = quats.SelectMany(q => new float[] { q.X, q.Y, q.Z, q.W }).ToList();
+        ArgumentNullException.ThrowIfNull(quats);
+
+        Controls = new List<float>(quats.Count * 4);
+        ReadOnlySpan<Quaternion> qSpan = CollectionsMarshal.AsSpan(quats);
+
+        for (int i = 0; i < qSpan.Length; i++)
+        {
+            var q = qSpan[i];
+            Controls.Add(q.X);
+            Controls.Add(q.Y);
+            Controls.Add(q.Z);
+            Controls.Add(q.W);
+        }
     }
 }

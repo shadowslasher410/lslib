@@ -1,6 +1,6 @@
 ﻿namespace LSLib.LS.Story;
 
-public interface OsirisSerializable
+public interface IOsirisSerializable
 {
     void Read(OsiReader reader);
     void Write(OsiWriter writer);
@@ -87,31 +87,20 @@ public static class OsiVersion
     public const uint VerLastSupported = VerPatch8Hotfix2;
 }
 
-public class OsiReader : BinaryReader
+public class OsiReader(Stream stream, Story story) : BinaryReader(stream ?? throw new ArgumentNullException(nameof(stream)))
 {
-    public byte Scramble = 0x00;
-    public UInt32 MinorVersion;
-    public UInt32 MajorVersion;
-    // Use 16-bit instead of 32-bit type IDs, BG3 Patch8+
-    public bool? ShortTypeIds = null;
-    public Dictionary<uint, uint> TypeAliases = new Dictionary<uint, uint>();
-    // TODO: Make RO!
-    public Story Story;
+    public byte Scramble { get; set; } = 0x00;
+    public uint MinorVersion { get; set; }
+    public uint MajorVersion { get; set; }
+    public bool? ShortTypeIds { get; set; } = null;
+    public Dictionary<uint, uint> TypeAliases { get; init; } = [];
+    public Story Story { get; init; } = story ?? throw new ArgumentNullException(nameof(story));
 
-    public uint Ver
-    {
-        get { return ((uint)MajorVersion << 8) | (uint)MinorVersion; }
-    }
-
-    public OsiReader(Stream stream, Story story)
-        : base(stream)
-    {
-        Story = story;
-    }
+    public uint Ver => (MajorVersion << 8) | MinorVersion;
 
     public override string ReadString()
     {
-        List<byte> bytes = new List<byte>();
+        var bytes = new List<byte>();
         while (true)
         {
             var b = (byte)(ReadByte() ^ Scramble);
@@ -125,12 +114,12 @@ public class OsiReader : BinaryReader
             }
         }
 
-        return Encoding.UTF8.GetString(bytes.ToArray());
+        return Encoding.UTF8.GetString([.. bytes]);
     }
 
     public override bool ReadBoolean()
     {
-        var b = ReadByte();
+        byte b = ReadByte();
         if (b != 0 && b != 1)
         {
             throw new InvalidDataException("Invalid boolean value; expected 0 or 1.");
@@ -141,20 +130,28 @@ public class OsiReader : BinaryReader
 
     public Guid ReadGuid()
     {
-        var guid = ReadBytes(16);
+        byte[] guid = ReadBytes(16);
+        if (guid.Length < 16)
+        {
+            throw new EndOfStreamException("Unable to read complete 16-byte Guid structure block data.");
+        }
         return new Guid(guid);
     }
 
-    public List<T> ReadList<T>() where T : OsirisSerializable, new()
+    public List<T> ReadList<T>() where T : IOsirisSerializable, new()
     {
         var items = new List<T>();
-        ReadList<T>(items);
+        ReadList(items);
         return items;
     }
 
-    public void ReadList<T>(List<T> items) where T : OsirisSerializable, new()
+    public void ReadList<T>(List<T> items) where T : IOsirisSerializable, new()
     {
-        var count = ReadUInt32();
+        ArgumentNullException.ThrowIfNull(items);
+
+        uint count = ReadUInt32();
+        items.EnsureCapacity(items.Count + (int)count);
+        
         while (count-- > 0)
         {
             var item = new T();
@@ -163,16 +160,20 @@ public class OsiReader : BinaryReader
         }
     }
 
-    public List<T> ReadRefList<T, RefT>() where T : OsiReference<RefT>, new()
+    public List<T> ReadRefList<T, TRef>() where T : OsiReference<TRef>, new() where TRef : class
     {
         var items = new List<T>();
-        ReadRefList<T, RefT>(items);
+        ReadRefList<T, TRef>(items);
         return items;
     }
 
-    public void ReadRefList<T, RefT>(List<T> items) where T : OsiReference<RefT>, new()
+    public void ReadRefList<T, TRef>(List<T> items) where T : OsiReference<TRef>, new() where TRef : class
     {
-        var count = ReadUInt32();
+        ArgumentNullException.ThrowIfNull(items);
+
+        uint count = ReadUInt32();
+        items.EnsureCapacity(items.Count + (int)count);
+
         while (count-- > 0)
         {
             var item = new T();
@@ -215,30 +216,23 @@ public class OsiReader : BinaryReader
     }
 }
 
-public class OsiWriter : BinaryWriter
+public class OsiWriter(Stream stream, bool leaveOpen) : BinaryWriter(stream ?? throw new ArgumentNullException(nameof(stream)), Encoding.UTF8, leaveOpen)
 {
-    public byte Scramble = 0x00;
-    public UInt32 MinorVersion;
-    public UInt32 MajorVersion;
-    // Use 16-bit instead of 32-bit type IDs, BG3 Patch8+
-    public bool ShortTypeIds;
-    public Dictionary<uint, uint> TypeAliases = new Dictionary<uint, uint>();
-    public Dictionary<uint, OsirisEnum> Enums = new Dictionary<uint, OsirisEnum>();
+    public byte Scramble { get; set; }
+    public uint MinorVersion { get; set; }
+    public uint MajorVersion { get; set; }
+    public bool ShortTypeIds { get; set; }
+    public Dictionary<uint, uint> TypeAliases { get; init; } = [];
+    public Dictionary<uint, OsirisEnum> Enums { get; init; } = [];
 
-    public uint Ver
-    {
-        get { return ((uint)MajorVersion << 8) | (uint)MinorVersion; }
-    }
+    public uint Ver => (MajorVersion << 8) | MinorVersion;
 
-    public OsiWriter(Stream stream, bool leaveOpen)
-        : base(stream, Encoding.UTF8, leaveOpen)
+    public override void Write(string value)
     {
-    }
+        ArgumentNullException.ThrowIfNull(value);
 
-    public override void Write(String s)
-    {
-        var bytes = Encoding.UTF8.GetBytes(s);
-        for (var i = 0; i < bytes.Length; i++)
+        byte[] bytes = Encoding.UTF8.GetBytes(value);
+        for (int i = 0; i < bytes.Length; i++)
         {
             bytes[i] = (byte)(bytes[i] ^ Scramble);
         }
@@ -246,61 +240,70 @@ public class OsiWriter : BinaryWriter
         Write(Scramble);
     }
 
-    public override void Write(bool b)
+    public override void Write(bool value)
     {
-        Write((byte)(b ? 1 : 0));
+        Write((byte)(value ? 1 : 0));
     }
 
     public void Write(Guid guid)
     {
-        var bytes = guid.ToByteArray();
+        byte[] bytes = guid.ToByteArray();
         Write(bytes, 0, bytes.Length);
     }
 
-    public void WriteList<T>(List<T> list) where T : OsirisSerializable
+    public void WriteList<T>(List<T> list) where T : IOsirisSerializable
     {
-        Write((UInt32)list.Count);
-        foreach (var item in list)
+        ArgumentNullException.ThrowIfNull(list);
+
+        Write((uint)list.Count);
+        foreach (T item in list)
         {
             item.Write(this);
         }
     }
 }
 
-public class SaveFileHeader : OsirisSerializable
+public class SaveFileHeader : IOsirisSerializable
 {
-    public string Version;
-    public byte MajorVersion;
-    public byte MinorVersion;
-    public bool BigEndian;
-    public byte Unused;
-    public UInt32 DebugFlags;
+    public string Version { get; set; } = string.Empty;
+    public byte MajorVersion { get; set; }
+    public byte MinorVersion { get; set; }
+    public bool BigEndian { get; set; }
+    public byte Unused { get; set; }
+    public uint DebugFlags { get; set; }
 
-    public uint Ver
-    {
-        get { return ((uint)MajorVersion << 8) | (uint)MinorVersion; }
-    }
+    public uint Ver => ((uint)MajorVersion << 8) | MinorVersion;
 
     public void Read(OsiReader reader)
     {
+        ArgumentNullException.ThrowIfNull(reader);
+
         reader.ReadByte();
-        Version = reader.ReadString();
+        Version = reader.ReadString() ?? string.Empty;
         MajorVersion = reader.ReadByte();
         MinorVersion = reader.ReadByte();
         BigEndian = reader.ReadBoolean();
         Unused = reader.ReadByte();
 
         if (Ver >= OsiVersion.VerAddVersionString)
+        {
             reader.ReadBytes(0x80); // Version string buffer
+        }
 
         if (Ver >= OsiVersion.VerAddDebugFlags)
+        {
             DebugFlags = reader.ReadUInt32();
+        }
         else
+        {
             DebugFlags = 0;
+        }
     }
 
     public void Write(OsiWriter writer)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+
         writer.Write((byte)0);
         writer.Write(Version);
         writer.Write(MajorVersion);
@@ -310,38 +313,45 @@ public class SaveFileHeader : OsirisSerializable
 
         if (Ver >= OsiVersion.VerAddVersionString)
         {
-            var versionString = String.Format("{0}.{1}", MajorVersion, MinorVersion);
-            var versionBytes = Encoding.UTF8.GetBytes(versionString);
+            string versionString = $"{MajorVersion}.{MinorVersion}";
+            byte[] versionBytes = Encoding.UTF8.GetBytes(versionString);
             byte[] version = new byte[0x80];
-            versionBytes.CopyTo(version, 0);
+            Array.Copy(versionBytes, version, Math.Min(versionBytes.Length, version.Length));
             writer.Write(version, 0, version.Length);
         }
 
         if (Ver >= OsiVersion.VerAddDebugFlags)
+        {
             writer.Write(DebugFlags);
+        }
     }
 }
 
-public class OsirisType : OsirisSerializable
+public class OsirisType : IOsirisSerializable
 {
-    public byte Index;
-    public byte Alias;
-    public string Name;
-    public bool IsBuiltin;
+    public byte Index { get; set; }
+    public byte Alias { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public bool IsBuiltin { get; set; }
 
     public static OsirisType MakeBuiltin(byte index, string name)
     {
-        var type = new OsirisType();
-        type.Index = index;
-        type.Alias = 0;
-        type.Name = name;
-        type.IsBuiltin = true;
-        return type;
+        ArgumentException.ThrowIfNullOrEmpty(name);
+
+        return new OsirisType
+        {
+            Index = index,
+            Alias = 0,
+            Name = name,
+            IsBuiltin = true
+        };
     }
 
     public void Read(OsiReader reader)
     {
-        Name = reader.ReadString();
+        ArgumentNullException.ThrowIfNull(reader);
+
+        Name = reader.ReadString() ?? string.Empty;
         Index = reader.ReadByte();
         IsBuiltin = false;
 
@@ -351,13 +361,14 @@ public class OsirisType : OsirisSerializable
         }
         else
         {
-            // D:OS 1 only supported string aliases
-            Alias = (int)Value.Type_OS1.String;
+            Alias = (byte)Value.Type_OS1.String;
         }
     }
 
     public void Write(OsiWriter writer)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+
         writer.Write(Name);
         writer.Write(Index);
 
@@ -369,6 +380,8 @@ public class OsirisType : OsirisSerializable
 
     public void DebugDump(TextWriter writer)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+
         if (Alias == 0)
         {
             writer.WriteLine("{0}: {1}", Index, Name);
@@ -380,42 +393,47 @@ public class OsirisType : OsirisSerializable
     }
 }
 
-public class OsirisEnumElement : OsirisSerializable
+public class OsirisEnumElement : IOsirisSerializable
 {
-    public String Name;
-    public UInt64 Value;
-
+    public string Name { get; set; } = string.Empty;
+    public ulong Value { get; set; }
 
     public void Read(OsiReader reader)
     {
-        Name = reader.ReadString();
+        ArgumentNullException.ThrowIfNull(reader);
+
+        Name = reader.ReadString() ?? string.Empty;
         Value = reader.ReadUInt64();
     }
 
     public void Write(OsiWriter writer)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+
         writer.Write(Name);
         writer.Write(Value);
     }
 
     public void DebugDump(TextWriter writer)
     {
+        ArgumentNullException.ThrowIfNull(writer);
         writer.WriteLine("{0}: {1}", Name, Value);
     }
 }
 
-public class OsirisEnum : OsirisSerializable
+public class OsirisEnum : IOsirisSerializable
 {
-    public UInt16 UnderlyingType;
-    public List<OsirisEnumElement> Elements;
-
+    public ushort UnderlyingType { get; set; }
+    public List<OsirisEnumElement> Elements { get; set; } = [];
 
     public void Read(OsiReader reader)
     {
+        ArgumentNullException.ThrowIfNull(reader);
+
         UnderlyingType = reader.ReadUInt16();
-        var elements = reader.ReadUInt32();
-        Elements = new List<OsirisEnumElement>();
-        while (elements-- > 0)
+        uint elementsCount = reader.ReadUInt32();
+        Elements = new List<OsirisEnumElement>((int)elementsCount);
+        while (elementsCount-- > 0)
         {
             var e = new OsirisEnumElement();
             e.Read(reader);
@@ -425,10 +443,12 @@ public class OsirisEnum : OsirisSerializable
 
     public void Write(OsiWriter writer)
     {
-        writer.Write(UnderlyingType);
-        writer.Write((UInt32)Elements.Count);
+        ArgumentNullException.ThrowIfNull(writer);
 
-        foreach (var e in Elements)
+        writer.Write(UnderlyingType);
+        writer.Write((uint)Elements.Count);
+
+        foreach (OsirisEnumElement e in Elements)
         {
             e.Write(writer);
         }
@@ -436,26 +456,30 @@ public class OsirisEnum : OsirisSerializable
 
     public void DebugDump(TextWriter writer)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+
         writer.WriteLine("Type {0}", UnderlyingType);
-        foreach (var e in Elements)
+        foreach (OsirisEnumElement e in Elements)
         {
             e.DebugDump(writer);
         }
     }
 }
 
-public class OsirisDivObject : OsirisSerializable
+public class OsirisDivObject : IOsirisSerializable
 {
-    public string Name;
-    public byte Type;
-    public UInt32 Key1;
-    public UInt32 Key2; // Some ref?
-    public UInt32 Key3; // Type again?
-    public UInt32 Key4;
+    public string Name { get; set; } = string.Empty;
+    public byte Type { get; set; }
+    public uint Key1 { get; set; }
+    public uint Key2 { get; set; }
+    public uint Key3 { get; set; }
+    public uint Key4 { get; set; }
 
     public void Read(OsiReader reader)
     {
-        Name = reader.ReadString();
+        ArgumentNullException.ThrowIfNull(reader);
+
+        Name = reader.ReadString() ?? string.Empty;
         Type = reader.ReadByte();
         Key1 = reader.ReadUInt32();
         Key2 = reader.ReadUInt32();
@@ -465,6 +489,8 @@ public class OsirisDivObject : OsirisSerializable
 
     public void Write(OsiWriter writer)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+
         writer.Write(Name);
         writer.Write(Type);
         writer.Write(Key1);
@@ -475,11 +501,12 @@ public class OsirisDivObject : OsirisSerializable
 
     public void DebugDump(TextWriter writer)
     {
+        ArgumentNullException.ThrowIfNull(writer);
         writer.WriteLine("{0} {1} ({2}, {3}, {4}, {5})", Type, Name, Key1, Key2, Key3, Key4);
     }
 }
 
-public enum EntryPoint : UInt32
+public enum EntryPoint : uint
 {
     // The next node is not an AND/NOT AND expression
     None = 0,
@@ -489,14 +516,16 @@ public enum EntryPoint : UInt32
     Right = 2
 };
 
-public class NodeEntryItem : OsirisSerializable
+public class NodeEntryItem : IOsirisSerializable
 {
-    public NodeReference NodeRef;
-    public EntryPoint EntryPoint;
-    public GoalReference GoalRef;
+    public NodeReference NodeRef { get; set; } = null!;
+    public EntryPoint EntryPoint { get; set; }
+    public GoalReference GoalRef { get; set; } = null!;
 
     public void Read(OsiReader reader)
     {
+        ArgumentNullException.ThrowIfNull(reader);
+
         NodeRef = reader.ReadNodeRef();
         EntryPoint = (EntryPoint)reader.ReadUInt32();
         GoalRef = reader.ReadGoalRef();
@@ -504,20 +533,26 @@ public class NodeEntryItem : OsirisSerializable
 
     public void Write(OsiWriter writer)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+
         NodeRef.Write(writer);
-        writer.Write((UInt32)EntryPoint);
+        writer.Write((uint)EntryPoint);
         GoalRef.Write(writer);
     }
 
     public void DebugDump(TextWriter writer, Story story)
     {
-        if (NodeRef.IsValid)
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(story);
+
+        if (NodeRef is not null && NodeRef.IsValid)
         {
             writer.Write("(");
             NodeRef.DebugDump(writer, story);
-            if (GoalRef.IsValid)
+
+            if (GoalRef is not null && GoalRef.IsValid && GoalRef.Resolve() is Goal goal)
             {
-                writer.Write(", Entry Point {0}, Goal {1})", EntryPoint, GoalRef.Resolve().Name);
+                writer.Write(", Entry Point {0}, Goal {1})", EntryPoint, goal.Name);
             }
             else
             {

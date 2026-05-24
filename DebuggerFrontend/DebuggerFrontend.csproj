@@ -1,36 +1,47 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <OutputType>Exe</OutputType>
-    <RootNamespace>LSTools.DebuggerFrontend</RootNamespace>
-    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    <PlatformTarget>x64</PlatformTarget>
-    <Platforms>AnyCPU;x64</Platforms>
-  </PropertyGroup>
-  <ItemGroup>
-    <None Remove="debuginfo.proto" />
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\LSLib\LSLib.csproj" />
-  </ItemGroup>
-  <ItemGroup>
-    <PackageReference Include="CommandLineArgumentsParser" Version="3.0.23" />
-    <PackageReference Include="Google.Protobuf" Version="3.34.1" />
-    <PackageReference Include="Grpc.Tools" Version="2.80.0">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
-    <Protobuf Include="DbgProtocol.proto" GrpcServices="None" />
-    <Protobuf Include="debuginfo.proto" GrpcServices="None" />
-  </ItemGroup>
-  <PropertyGroup>
-    <PreBuildEvent>"$(SolutionDir)\external\gppg\binaries\GpLex" /out:"$(SolutionDir)\DebuggerFrontend\ExpressionParser\Expression.lex.cs" "$(SolutionDir)\DebuggerFrontend\ExpressionParser\Expression.lex"
-"$(SolutionDir)\external\gppg\binaries\Gppg" /out:"$(SolutionDir)\DebuggerFrontend\ExpressionParser\Expression.yy.cs" "$(SolutionDir)\DebuggerFrontend\ExpressionParser\Expression.yy"</PreBuildEvent>
-    <AssemblyTitle>Osiris VS Code Debugger Frontend</AssemblyTitle>
-    <Product>LSLib</Product>
-    <Copyright>Copyright © Norbyte 2012-2018</Copyright>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.0.0</FileVersion>
-  </PropertyGroup>
+
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<OutputType>Exe</OutputType>
+		<RootNamespace>LSTools.DebuggerFrontend</RootNamespace>
+
+		<LangVersion>14</LangVersion>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+
+		<AssemblyTitle>Debugger Frontend</AssemblyTitle>
+		<Product>LSLib</Product>
+		<Copyright>Copyright © Norbyte 2012-2018</Copyright>
+		<Trademark></Trademark>
+		<AssemblyVersion>1.0.0.0</AssemblyVersion>
+		<FileVersion>1.0.0.0</FileVersion>
+
+		<ComVisible>false</ComVisible>
+		<Guid>31e71543-cbcf-43bb-af77-d210d548118e</Guid>
+
+		<PublishTrimmed>true</PublishTrimmed>
+		<PublishAot>true</PublishAot>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<PlatformTarget>x64</PlatformTarget>
+		<Platforms>AnyCPU;x64</Platforms>
+	</PropertyGroup>
+
+	<Target Name="PreBuild" BeforeTargets="PreBuildEvent">
+		<PropertyGroup>
+			<IsWindows>$([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform($([System.Runtime.InteropServices.OSPlatform]::Windows)))</IsWindows>
+
+			<ExeExt Condition="'$(IsWindows)' == 'true'">.exe</ExeExt>
+			<ExeExt Condition="'$(IsWindows)' != 'true'"></ExeExt>
+		</PropertyGroup>
+	</Target>
+	
+	<ItemGroup>
+		<ProjectReference Include="..\LSLib\LSLib.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="LightProto" Version="1.3.2" />
+		<PackageReference Include="Superpower" Version="3.2.1" />
+		<PackageReference Include="System.CommandLine" Version="2.0.8" />
+	</ItemGroup>
 </Project>

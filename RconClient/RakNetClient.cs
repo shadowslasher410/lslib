@@ -1,140 +1,136 @@
-﻿using LSLib.Rcon.Packets;
-using System;
-using System.IO;
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 
 namespace LSLib.Rcon;
 
-public class AsyncUdpClient
+public sealed class AsyncUdpClient : IDisposable
 {
-    private UdpClient Socket;
-    public readonly UInt16 Port;
+    private readonly UdpClient _socket;
+    public ushort Port { get; }
 
-    public delegate void PacketReceivedDelegate(IPEndPoint address, byte[] packet);
-    public PacketReceivedDelegate PacketReceived = delegate { };
+    public event Action<IPEndPoint, byte[]> PacketReceived = delegate { };
 
     public AsyncUdpClient()
     {
-        Random rnd = new();
-        // Select a port number over 10000 as low port numbers
-        // are frequently used by various server apps.
-        Port = (UInt16)((rnd.Next() % (65536 - 10000)) + 10000);
-        Socket = new UdpClient(Port);
+        ushort assignedPort = (ushort)((Random.Shared.Next() % (65536 - 10000)) + 10000);
+        Port = assignedPort;
+        _socket = new UdpClient(Port);
     }
-    
-    public void RunLoop()
+
+    public async Task RunLoopAsync(CancellationToken cancellationToken = default)
     {
-        while (true)
+        while (!cancellationToken.IsCancellationRequested)
         {
-            IPEndPoint source = new(0, 0);
-            byte[] packet;
             try
             {
-                packet = Socket.Receive(ref source);
+                UdpReceiveResult result = await _socket.ReceiveAsync(cancellationToken);
+                PacketReceived(result.RemoteEndPoint, result.Buffer);
             }
             catch (SocketException e)
             {
-                // WSAECONNRESET - This may happen if the Rcon server is 
-                // not running on the port we're trying to send messages to.
                 if (e.ErrorCode == 10054)
                 {
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine("Received connection reset - Rcon server probably not running.");
-                    Console.ResetColor();
+                    var originalColor = Console.ForegroundColor;
+                    try
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.Error.WriteLine("Received connection reset - Rcon server probably not running.");
+                    }
+                    finally
+                    {
+                        Console.ForegroundColor = originalColor;
+                    }
                     break;
                 }
-                else
-                {
-                    throw;
-                }
+                throw;
             }
-
-            PacketReceived(source, packet);
+            catch (OperationCanceledException)
+            {
+                break;
+            }
         }
     }
-
     public void Send(IPEndPoint address, byte[] packet)
     {
-        Socket.Send(packet, packet.Length, address);
+        _socket.Send(packet, packet.Length, address);
+    }
+
+    public void Dispose()
+    {
+        _socket.Dispose();
     }
 }
 
-public class RakNetSocket
+public sealed class RakNetSocket
 {
-    private AsyncUdpClient Socket;
-    private byte[] ClientId;
-    private RakNetSession Session;
+    private readonly AsyncUdpClient _socket;
+    private readonly byte[] _clientId = new byte[8];
+    private RakNetSession? _session;
 
-    public delegate void SessionEstablishedDelegate(RakNetSession session);
-    public SessionEstablishedDelegate SessionEstablished = delegate { };
+    public event Action<RakNetSession> SessionEstablished = delegate { };
 
     public RakNetSocket()
     {
-        Socket = new AsyncUdpClient();
-        Socket.PacketReceived += this.OnPacketReceived;
-
-        ClientId = new byte[8];
-        var random = new Random();
-        random.NextBytes(ClientId);
+        _socket = new AsyncUdpClient();
+        _socket.PacketReceived += OnPacketReceived;
+        Random.Shared.NextBytes(_clientId);
     }
 
-    private Packet DecodePacket(Byte id, BinaryReaderBE reader)
+    private static IPacket DecodePacket(byte id, BinaryReaderBE reader)
     {
-        Packet packet = (PacketId)id switch
+        IPacket packet = (PacketId)id switch
         {
             PacketId.OpenConnectionRequest1 => new OpenConnectionRequest1(),
             PacketId.OpenConnectionResponse1 => new OpenConnectionResponse1(),
             PacketId.OpenConnectionRequest2 => new OpenConnectionRequest2(),
             PacketId.OpenConnectionResponse2 => new OpenConnectionResponse2(),
-            _ => throw new InvalidDataException("Unrecognized packet ID"),
+            _ => throw new InvalidDataException($"Unrecognized network packet type signature parameter: 0x{id:X2}")
         };
         packet.Read(reader);
         return packet;
     }
 
-    private void HandleConnectionResponse1(IPEndPoint address, OpenConnectionResponse1 response)
+    private void HandleConnectionResponse1(IPEndPoint address, OpenConnectionResponse1 _)
     {
-        byte[] ipBytes = IPAddress.Parse("127.0.0.1").GetAddressBytes();
+        uint ipUint = BitConverter.ToUInt32(IPAddress.Loopback.GetAddressBytes(), 0);
         if (BitConverter.IsLittleEndian)
         {
-            Array.Reverse(ipBytes);
+            ipUint = System.Buffers.Binary.BinaryPrimitives.ReverseEndianness(ipUint);
         }
-        uint ipUint = BitConverter.ToUInt32(ipBytes, 0);
+
         var connReq = new OpenConnectionRequest2
         {
             Magic = RakNetConstants.Magic,
-            ClientId = ClientId,
+            ClientId = _clientId,
             Address = new RakAddress
             {
                 Address = ipUint,
-                Port = (ushort)IPAddress.HostToNetworkOrder((short)Socket.Port)
+                Port = (ushort)IPAddress.HostToNetworkOrder((short)_socket.Port)
             },
             MTU = 1200
         };
         Send(address, connReq);
     }
 
-    private void HandleConnectionResponse2(IPEndPoint address, OpenConnectionResponse2 response)
+    private void HandleConnectionResponse2(IPEndPoint address, OpenConnectionResponse2 _)
     {
-        Session = new RakNetSession(this, address, ClientId);
-        SessionEstablished(Session);
-        Session.OnConnected();
+        _session = new RakNetSession(this, address, _clientId);
+        SessionEstablished(_session);
+        _session.OnConnected();
     }
 
-    private void HandlePacket(IPEndPoint address, Packet packet)
+    private void HandlePacket(IPEndPoint address, IPacket packet)
     {
-        if (packet is OpenConnectionResponse1)
+        switch (packet)
         {
-            HandleConnectionResponse1(address, packet as OpenConnectionResponse1);
-        }
-        else if (packet is OpenConnectionResponse2)
-        {
-            HandleConnectionResponse2(address, packet as OpenConnectionResponse2);
-        }
-        else
-        {
-            throw new NotImplementedException("Packet type not handled");
+            case OpenConnectionResponse1 resp1:
+                HandleConnectionResponse1(address, resp1);
+                break;
+            case OpenConnectionResponse2 resp2:
+                HandleConnectionResponse2(address, resp2);
+                break;
+            default:
+                throw new NotSupportedException($"Target network packet type assignment not handled: {packet.GetType().Name}");
         }
     }
 
@@ -143,6 +139,7 @@ public class RakNetSocket
         using var stream = new MemoryStream(packet);
         using var reader = new BinaryReaderBE(stream);
         byte id = reader.ReadByte();
+
         if (id < 0x80)
         {
             var decoded = DecodePacket(id, reader);
@@ -150,27 +147,27 @@ public class RakNetSocket
         }
         else
         {
-            if (Session != null)
+            if (_session is not null)
             {
-                Session.HandlePacket(id, reader);
+                _session.HandlePacket(id, reader);
             }
             else
             {
-                throw new Exception("Unhandled session packet - no session established!");
+                throw new InvalidOperationException("Incoming network traffic arrived before an active RakNet session established context initialized.");
             }
         }
     }
 
-    public void Send(IPEndPoint address, Packet packet)
+    public void Send(IPEndPoint address, IPacket packet)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriterBE(stream);
         packet.Write(writer);
         stream.SetLength(stream.Position);
-        Socket.Send(address, stream.ToArray());
+        _socket.Send(address, stream.ToArray());
     }
 
-    public void BeginConnection(IPEndPoint address)
+    public async Task BeginConnectionAsync(IPEndPoint address, CancellationToken cancellationToken = default)
     {
         var connReq = new OpenConnectionRequest1
         {
@@ -178,7 +175,6 @@ public class RakNetSocket
             Protocol = RakNetConstants.ProtocolVersion
         };
         Send(address, connReq);
-
-        Socket.RunLoop();
+        await _socket.RunLoopAsync(cancellationToken);
     }
 }

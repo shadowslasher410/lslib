@@ -1,266 +1,187 @@
-﻿using LSLib.Stats.Functors;
-using System.IO;
-using System.Text.RegularExpressions;
-using System.Xml;
-using System.Xml.Linq;
+﻿using LSLib.Parser;
 
-namespace LSLib.Stats;
+namespace LSLibStats.Stats;
 
-public class StatEnumeration(string name)
+public partial class StatDefinitionRepository { }
+
+public sealed class StatEnumeration(string name)
 {
-    public readonly string Name = name;
-    public readonly List<string> Values = [];
-    public readonly Dictionary<string, int> ValueToIndexMap = [];
+    public string Name { get; } = name ?? throw new ArgumentNullException(nameof(name));
+    public List<string> Values { get; } = [];
+    public Dictionary<string, int> ValueToIndexMap { get; } = new(StringComparer.Ordinal);
 
     public void AddItem(int index, string value)
     {
+        ArgumentNullException.ThrowIfNull(value);
         if (Values.Count != index)
-        {
-            throw new Exception("Enumeration items must be added in order.");
-        }
+            throw new InvalidOperationException("Enumeration item insertion indices must be perfectly sequential.");
 
         Values.Add(value);
-
-        // Some vanilla enums are bogus and contain names multiple times
         ValueToIndexMap.TryAdd(value, index);
     }
 
-    public void AddItem(string label)
-    {
-        AddItem(Values.Count, label);
-    }
+    public void AddItem(string label) => AddItem(Values.Count, label);
 }
 
-public class StatField(string name, string type)
+public sealed class StatReferenceConstraint
 {
-    public string Name = name;
-    public string Type = type;
-    public StatEnumeration? EnumType = null;
-    public List<StatReferenceConstraint>? ReferenceTypes = null;
+    public string StatType { get; set; } = string.Empty;
+}
 
-    private IStatValueValidator? Validator = null;
+public sealed class StatField(string name, string type)
+{
+    public string Name { get; set; } = name ?? throw new ArgumentNullException(nameof(name));
+    public string Type { get; set; } = type ?? throw new ArgumentNullException(nameof(type));
+    public StatEnumeration? EnumType { get; set; }
+    public List<StatReferenceConstraint>? ReferenceTypes { get; set; }
+    private IStatValueValidator? _validator;
 
     public IStatValueValidator GetValidator(StatValueValidatorFactory factory, StatDefinitionRepository definitions)
     {
-        Validator ??= factory.CreateValidator(this, definitions);
-        return Validator;
+        ArgumentNullException.ThrowIfNull(factory);
+        ArgumentNullException.ThrowIfNull(definitions);
+        return _validator ??= factory.CreateValidator(this, definitions);
     }
 }
 
-public class StatEntryType(string name, string nameProperty, string? basedOnProperty)
+public sealed class StatEntryType(string name, string nameProperty, string? basedOnProperty)
 {
-    public readonly string Name = name;
-    public readonly string NameProperty = nameProperty;
-    public readonly string? BasedOnProperty = basedOnProperty;
-    public readonly Dictionary<string, StatField> Fields = [];
+    public string Name { get; } = name ?? throw new ArgumentNullException(nameof(name));
+    public string NameProperty { get; } = nameProperty ?? throw new ArgumentNullException(nameof(nameProperty));
+    public string? BasedOnProperty { get; } = basedOnProperty;
+    public Dictionary<string, StatField> Fields { get; } = new(StringComparer.Ordinal);
 }
 
-public class StatFunctorArgumentType(string name, string type)
+public sealed class StatFunctorArgumentType(string name, string type)
 {
-    public string Name = name;
-    public string Type = type;
+    public string Name { get; set; } = name ?? throw new ArgumentNullException(nameof(name));
+    public string Type { get; set; } = type ?? throw new ArgumentNullException(nameof(type));
 }
 
-public class StatFunctorType(string name, int requiredArgs, List<StatFunctorArgumentType> args)
+public sealed class StatFunctorType(string name, int requiredArgs, List<StatFunctorArgumentType> args)
 {
-    public string Name = name;
-    public int RequiredArgs = requiredArgs;
-    public List<StatFunctorArgumentType> Args = args;
+    public string Name { get; set; } = name ?? throw new ArgumentNullException(nameof(name));
+    public int RequiredArgs { get; set; } = requiredArgs;
+    public List<StatFunctorArgumentType> Args { get; set; } = args ?? throw new ArgumentNullException(nameof(args));
 }
 
-public partial class StatDefinitionRepository
+public interface IStatValueValidator
 {
-    public readonly Dictionary<string, StatEnumeration> Enumerations = [];
-    public readonly Dictionary<string, StatEntryType> Types = [];
-    public readonly Dictionary<string, StatFunctorType> Functors = [];
-    public readonly Dictionary<string, StatFunctorType> Boosts = [];
-    public readonly Dictionary<string, StatFunctorType> DescriptionParams = [];
+    void Validate(DiagnosticContext ctx, CodeLocation? location, object value, PropertyDiagnosticContainer errors);
+}
 
-    private StatField AddField(StatEntryType defn, string name, string typeName)
+public interface IStatReferenceValidator
+{
+    bool IsValidReference(string reference, string statType);
+    bool IsValidGuidResource(string name, string resourceType);
+}
+
+public sealed class StatLoadingContext
+{
+    public StatDefinitionRepository Definitions { get; init; } = new();
+    public Dictionary<string, Dictionary<string, StatDeclaration>> DeclarationsByType { get; init; } = new(StringComparer.Ordinal);
+
+    public static void LogError(string code, string message, CodeLocation? location, List<PropertyDiagnosticContext>? contexts = null)
     {
-        var field = new StatField(name, typeName);
-
-        if (Enumerations.TryGetValue(typeName, out var enumType) && enumType.Values.Count > 0)
-        {
-            field.EnumType = enumType;
-        }
-
-        defn.Fields.Add(name, field);
-        return field;
+        var contextStr = contexts is not null ? $" [{string.Join(" -> ", contexts.Select(c => c.Context))}]" : string.Empty;
+        Console.Error.WriteLine($"[{code}] {location?.FileName}:{location?.StartLine}:{location?.StartColumn} - {message}{contextStr}");
     }
+}
 
-    private void AddEnumeration(string name, List<string> labels)
+public enum DiagnosticCode
+{
+    StatSyntaxError,
+    StatPropertyValueInvalid,
+    StatEntityTypeUnknown,
+    StatNameMissing,
+    StatNameDuplicate
+}
+public class DiagnosticContext
+{
+    public bool IgnoreMissingReferences { get; set; }
+    public StatDeclaration? CurrentDeclaration { get; set; }
+    public CodeLocation? PropertyValueSpan { get; set; }
+}
+
+public enum PropertyDiagnosticContextType
+{
+    Argument,
+    Call,
+    Property,
+    Entry
+}
+
+public readonly struct PropertyDiagnosticContext
+{
+    public PropertyDiagnosticContextType Type { get; init; }
+    public required string Context { get; init; }
+    public CodeLocation? Location { get; init; }
+}
+
+public class PropertyDiagnostic(string message, CodeLocation? location = null, List<PropertyDiagnosticContext>? contexts = null)
+{
+    public string Message { get; set; } = message;
+    public CodeLocation? Location { get; set; } = location;
+    public List<PropertyDiagnosticContext>? Contexts { get; set; } = contexts;
+}
+public sealed class PropertyDiagnosticContainer
+{
+    public List<PropertyDiagnostic>? Messages { get; set; } = [];
+
+    public bool Empty => Messages is null or { Count: 0 };
+
+    public void AddContext(PropertyDiagnosticContextType type, string name, CodeLocation? location = null)
     {
-        var enumType = new StatEnumeration(name);
-        foreach (var label in labels)
+        if (Empty) return;
+
+        var context = new PropertyDiagnosticContext
         {
-            enumType.AddItem(label);
-        }
-        Enumerations.Add(name, enumType);
-    }
+            Type = type,
+            Context = name,
+            Location = location
+        };
 
-    public void AddFunctor(Dictionary<string, StatFunctorType> dict, string name, int requiredArgs, List<string> argDescs)
-    {
-        var args = new List<StatFunctorArgumentType>();
-        for (int i = 0; i < argDescs.Count; i += 2)
+        foreach (var msg in Messages!)
         {
-            args.Add(new StatFunctorArgumentType(argDescs[i], argDescs[i + 1]));
-        }
-
-        AddFunctor(dict, name, requiredArgs, args);
-    }
-
-    public void AddFunctor(Dictionary<string, StatFunctorType> dict, string name, int requiredArgs, IEnumerable<StatFunctorArgumentType> args)
-    {
-        var functor = new StatFunctorType(name, requiredArgs, args.ToList());
-        dict.Add(name, functor);
-    }
-
-    public void LoadCustomStatEntryType(XmlElement ele)
-    {
-        var entry = new StatEntryType(ele.GetAttribute("Name"), ele.GetAttribute("NameProperty"), null);
-        Types.Add(entry.Name, entry);
-
-        foreach (var field in ele.GetElementsByTagName("Field"))
-        {
-            var e = (XmlElement)field;
-            AddField(entry, e.GetAttribute("Name"), e.GetAttribute("Type"));
-        }
-    }
-
-    public void LoadCustomEnumeration(XmlElement ele)
-    {
-        var name = ele.GetAttribute("Name");
-        var labels = new List<string>();
-
-        foreach (var field in ele.GetElementsByTagName("Label"))
-        {
-            labels.Add(((XmlElement)field).InnerText);
-        }
-
-        AddEnumeration(name, labels);
-    }
-
-    public void LoadCustomFunction(XmlElement ele)
-    {
-        var name = ele.GetAttribute("Name");
-        var type = ele.GetAttribute("Type");
-        var requiredArgsStr = ele.GetAttribute("RequiredArgs");
-        var requiredArgs = (requiredArgsStr == "") ? 0 : Int32.Parse(requiredArgsStr);
-        var args = new List<string>();
-
-        foreach (var arg in ele.GetElementsByTagName("Arg"))
-        {
-            var e = (XmlElement)arg;
-            args.Add(e.GetAttribute("Name"));
-            args.Add(e.GetAttribute("Type"));
-        }
-
-        switch (type)
-        {
-            case "Boost": AddFunctor(Boosts, name, requiredArgs, args); break;
-            case "Functor": AddFunctor(Functors, name, requiredArgs, args); break;
-            case "DescriptionParams": AddFunctor(DescriptionParams, name, requiredArgs, args); break;
-            default: throw new InvalidDataException($"Unknown function type in definition file: {type}");
+            msg.Contexts ??= [];
+            msg.Contexts.Add(context);
         }
     }
 
-    public void LoadLSLibDefinitions(Stream stream)
+    public void Add(string message, CodeLocation? location = null)
     {
-        var doc = new XmlDocument();
-        doc.Load(stream);
+        Messages ??= [];
+        Messages.Add(new PropertyDiagnostic(message, location));
+    }
 
-        foreach (var node in doc.DocumentElement!.ChildNodes)
+    public void MergeInto(PropertyDiagnosticContainer container)
+    {
+        ArgumentNullException.ThrowIfNull(container);
+        if (Empty) return;
+
+        container.Messages ??= [];
+        container.Messages.AddRange(Messages ?? []);
+    }
+
+    public void MergeInto(StatLoadingContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (Empty) return;
+
+        foreach (var message in Messages ?? [])
         {
-            if (node is XmlElement element)
+            var location = message.Location;
+            if (message.Contexts is not null)
             {
-                switch (element.Name)
+                foreach (var ctx in message.Contexts)
                 {
-                    case "EntryType": LoadCustomStatEntryType(element); break;
-                    case "Enumeration": LoadCustomEnumeration(element); break;
-                    case "Function": LoadCustomFunction(element); break;
-                    default: throw new InvalidDataException($"Unknown entry type in definition file: {element.Name}");
+                    location ??= ctx.Location;
                 }
             }
+
+            StatLoadingContext.LogError(DiagnosticCode.StatPropertyValueInvalid.ToString(), message.Message, location, message.Contexts);
         }
     }
 
-    public void LoadDefinitions(Stream stream)
-    {
-        StatEntryType? defn = null;
-        string? line;
-
-        using var reader = new StreamReader(stream);
-
-        while ((line = reader.ReadLine()) != null)
-        {
-            var trimmed = line.Trim();
-            if (trimmed.Length > 0)
-            {
-                if (trimmed.StartsWith("modifier type "))
-                {
-                    var name = trimmed[15..^1];
-                    defn = new StatEntryType(name, "Name", "Using");
-                    Types.Add(defn.Name, defn);
-                    AddField(defn, "Name", "FixedString");
-                    var usingRef = AddField(defn, "Using", "StatReference");
-                    usingRef.ReferenceTypes =
-                    [
-                        new StatReferenceConstraint
-                        {
-                            StatType = name
-                        }
-                    ];
-                }
-                else if (trimmed.StartsWith("modifier \""))
-                {
-                    var nameEnd = trimmed.IndexOf('"', 10);
-                    var name = trimmed[10..nameEnd];
-                    var typeName = trimmed.Substring(nameEnd + 3, trimmed.Length - nameEnd - 4);
-                    AddField(defn!, name, typeName);
-                }
-            }
-        }
-    }
-
-    public void LoadEnumerations(Stream stream)
-    {
-        var valueRe = EnumerationValueRegEx();
-        StatEnumeration? curEnum = null;
-        string? line;
-
-        using var reader = new StreamReader(stream);
-        while ((line = reader.ReadLine()) != null)
-        {
-            var trimmed = line.Trim();
-            if (trimmed.Length > 0)
-            {
-                if (trimmed.StartsWith("valuelist "))
-                {
-                    var name = trimmed[11..^1];
-                    curEnum = new StatEnumeration(name);
-                    Enumerations.Add(curEnum.Name, curEnum);
-                }
-                else
-                {
-                    var match = valueRe.Match(trimmed);
-                    if (match.Success)
-                    {
-                        var value = match.Groups["value"].Value;
-                        if (value != null)
-                        {
-                            curEnum!.AddItem(Int32.Parse(value), match.Groups["label"].Value);
-                        }
-                        else
-                        {
-                            curEnum!.AddItem(match.Groups["label"].Value);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    [GeneratedRegex("^value \"(?<label>[^\"]*)\"(\\s*:\\s*(?<value>[0-9]+))?$", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant)]
-    private static partial Regex EnumerationValueRegEx();
+    public void Clear() => Messages?.Clear();
 }

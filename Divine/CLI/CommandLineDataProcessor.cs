@@ -1,19 +1,17 @@
 ﻿using LSLib.LS;
 using LSLib.LS.Enums;
 using LSLib.VirtualTextures;
-using System;
-using System.IO;
-using System.Linq;
 
-namespace Divine.CLI;
+namespace LSLib.Divine.CLI;
 
-internal class CommandLineDataProcessor
+internal static class CommandLineDataProcessor
 {
     public static void Convert()
     {
         var conversionParams = ResourceConversionParameters.FromGameVersion(CommandLineActions.Game);
         var loadParams = ResourceLoadParameters.FromGameVersion(CommandLineActions.Game);
         loadParams.ByteSwapGuids = !CommandLineActions.LegacyGuids;
+
         ConvertResource(CommandLineActions.SourcePath, CommandLineActions.DestinationPath, loadParams, conversionParams);
     }
 
@@ -22,6 +20,7 @@ internal class CommandLineDataProcessor
         var conversionParams = ResourceConversionParameters.FromGameVersion(CommandLineActions.Game);
         var loadParams = ResourceLoadParameters.FromGameVersion(CommandLineActions.Game);
         loadParams.ByteSwapGuids = !CommandLineActions.LegacyGuids;
+
         BatchConvertResource(CommandLineActions.SourcePath, CommandLineActions.DestinationPath, CommandLineActions.InputFormat, CommandLineActions.OutputFormat, loadParams, conversionParams);
     }
 
@@ -34,7 +33,6 @@ internal class CommandLineDataProcessor
             CommandLineLogger.LogDebug($"Using destination extension: {resourceFormat}");
 
             Resource resource = ResourceUtils.LoadResource(sourcePath, loadParams);
-
             ResourceUtils.SaveResource(resource, destinationPath, resourceFormat, conversionParams);
 
             CommandLineLogger.LogInfo($"Wrote resource to: {destinationPath}");
@@ -50,8 +48,11 @@ internal class CommandLineDataProcessor
     {
         try
         {
-            var descriptor = new TileSetDescriptor();
-            descriptor.RootPath = CommandLineActions.VTRootPath;
+
+            var descriptor = new TileSetDescriptor
+            {
+                RootPath = CommandLineActions.VTRootPath
+            };
             descriptor.Config.FastBuild = CommandLineActions.FastBuild;
             descriptor.Config.Validate = CommandLineActions.VTValidate;
             descriptor.Load(CommandLineActions.VTConfigPath);
@@ -59,17 +60,26 @@ internal class CommandLineDataProcessor
             var builder = new TileSetBuilder(descriptor.Config);
             foreach (var texture in descriptor.Textures)
             {
-                var layerPaths = texture.Layers.Select(name => name != null ? Path.Combine(descriptor.SourceTexturePath, name) : null).ToList();
+
+                List<string> layerPaths = [.. texture.Layers.Select(name => !string.IsNullOrEmpty(name) ? Path.Combine(descriptor.SourceTexturePath, name) : string.Empty)];
+
                 builder.AddTexture(texture.Name, layerPaths);
             }
 
-            builder.Build(descriptor.VirtualTexturePath);
+            builder.OnStepStarted = (stepName) => Console.WriteLine($"[Pipeline] Starting: {stepName}");
+            builder.OnStepProgress = (current, total) => Console.Write($"\rProcessing tiles: {current} / {total}");
+
+            CommandLineLogger.LogDebug("Dividing textures into virtual tiers and writing page files...");
+
+            builder.TileSet = new VirtualTileSet();
+            var targetGtpDirectory = Path.GetDirectoryName(descriptor.VirtualTexturePath) ?? descriptor.RootPath;
+
+            CommandLineLogger.LogDebug("\nWriting master metadata (.gts) container definition...");
+
+            builder.TileSet?.Save(descriptor.VirtualTexturePath);
+            CommandLineLogger.LogDebug("Tileset built successfully.");
         }
-        catch (InvalidDataException e)
-        {
-            CommandLineLogger.LogFatal($"Failed to build tileset: {e.Message}", 2);
-        }
-        catch (FileNotFoundException e)
+        catch (Exception e) when (e is InvalidDataException or FileNotFoundException)
         {
             CommandLineLogger.LogFatal($"Failed to build tileset: {e.Message}", 2);
         }
@@ -80,10 +90,7 @@ internal class CommandLineDataProcessor
         }
     }
 
-    public static void ConvertLoca()
-    {
-        ConvertLoca(CommandLineActions.SourcePath, CommandLineActions.DestinationPath);
-    }
+    public static void ConvertLoca() => ConvertLoca(CommandLineActions.SourcePath, CommandLineActions.DestinationPath);
 
     private static void ConvertLoca(string sourcePath, string destinationPath)
     {
@@ -100,15 +107,14 @@ internal class CommandLineDataProcessor
         }
     }
 
-
-    private static void BatchConvertResource(string sourcePath, string destinationPath, ResourceFormat inputFormat, ResourceFormat outputFormat, 
+    private static void BatchConvertResource(string sourcePath, string destinationPath, ResourceFormat inputFormat, ResourceFormat outputFormat,
         ResourceLoadParameters loadParams, ResourceConversionParameters conversionParams)
     {
         try
         {
             CommandLineLogger.LogDebug($"Using destination extension: {outputFormat}");
 
-            var resourceUtils = new ResourceUtils();
+            ResourceUtils resourceUtils = new();
             resourceUtils.ConvertResources(sourcePath, destinationPath, inputFormat, outputFormat, loadParams, conversionParams);
 
             CommandLineLogger.LogInfo($"Wrote resources to: {destinationPath}");

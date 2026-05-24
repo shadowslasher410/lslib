@@ -1,264 +1,271 @@
 ﻿using LSLib.LS;
+using LSLib.LS.Resources.LSF;
 using LSLib.LS.Story;
 using LSLib.LS.Story.Compiler;
-using LSLib.LS.Story.GoalParser;
-using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 
 namespace LSTools.StoryCompiler;
 
-class ModCompiler : IDisposable
+public static class CompilerDiagnosticCodes
 {
-    class GoalScript
+    public const string MissingTemplates = "X01";
+    public const string MissingGameObjects = "X02";
+    public const string UnknownGameObjectType = "X03";
+}
+
+public sealed partial class ModCompiler(ILogger logger, string gameDataPath) : IDisposable
+{
+    private sealed class GoalScript
     {
-        public string Name;
-        public string Path;
-        public byte[] ScriptBody;
+        public string Name { get; init; } = string.Empty;
+        public string Path { get; init; } = string.Empty;
+        public byte[] ScriptBody { get; set; } = [];
     }
 
-    private Logger Logger;
-    private String GameDataPath;
-    private VFS FS;
-    private Compiler Compiler = new Compiler();
-    private ModResources Mods = new ModResources();
-    private List<GoalScript> GoalScripts = new List<GoalScript>();
-    private List<byte[]> GameObjectLSFs = new List<byte[]>();
-    private bool HasErrors = false;
-    private HashSet<string> TypeCoercionWhitelist;
+    [GeneratedRegex(@"^([a-zA-Z0-9_]+)\s+([0-9]+)$", RegexOptions.CultureInvariant)]
+    private static partial Regex OrphanQueryRegex();
 
-    public bool CheckOnly = false;
-    public bool CheckGameObjects = false;
-    public bool LoadPackages = true;
-    public bool AllowTypeCoercion = false;
-    public bool OsiExtender = false;
-    public TargetGame Game = TargetGame.DOS2;
+    private readonly ILogger _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    private readonly string _gameDataPath = gameDataPath ?? throw new ArgumentNullException(nameof(gameDataPath));
+    private readonly Compiler _compiler = new();
+    private readonly ModResources _mods = new();
+    private readonly List<GoalScript> _goalScripts = [];
+    private readonly List<byte[]> _gameObjectLSFs = [];
 
-    public ModCompiler(Logger logger, String gameDataPath)
-    {
-        Logger = logger;
-        GameDataPath = gameDataPath;
-    }
+    private readonly HashSet<string> _typeCoercionWhitelist = [];
+
+    private VFS _fs = null!;
+    private int _hasErrors;
+
+    public bool CheckOnly { get; set; }
+    public bool CheckGameObjects { get; set; }
+    public bool LoadPackages { get; set; } = true;
+    public bool AllowTypeCoercion { get; set; }
+    public bool OsiExtender { get; set; }
+    public TargetGame Game { get; set; } = TargetGame.DOS2;
+
+    public bool HasErrors => Volatile.Read(ref _hasErrors) == 1;
 
     public void Dispose()
     {
-        Mods.Dispose();
+        _mods.Dispose();
+        (_fs as IDisposable)?.Dispose();
     }
 
     private void LoadStoryHeaders(Stream stream)
     {
-        var hdrLoader = new StoryHeaderLoader(Compiler.Context);
-        var declarations = hdrLoader.ParseHeader(stream);
-        if (declarations == null)
-        {
-            throw new Exception("Failed to parse story header file");
-        }
+        var declarations = StoryHeaderLoader.ParseHeader(stream)
+            ?? throw new InvalidDataException("Failed to parse story header file data content.");
 
+        var hdrLoader = new StoryHeaderLoader(_compiler.Context);
         hdrLoader.LoadHeader(declarations);
     }
 
+
     private void LoadTypeCoercionWhitelist(Stream stream)
     {
-        TypeCoercionWhitelist = new HashSet<string>();
-        using (var reader = new StreamReader(stream))
+        _typeCoercionWhitelist.Clear();
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+
+        while (reader.ReadLine() is { } line)
         {
-            while (!reader.EndOfStream)
+            var func = line.Trim();
+            if (func.Length > 0)
             {
-                var func = reader.ReadLine().Trim();
-                if (func.Length > 0)
-                {
-                    TypeCoercionWhitelist.Add(func);
-                }
+                _typeCoercionWhitelist.Add(func);
             }
         }
     }
 
     public void SetWarningOptions(Dictionary<string, bool> options)
     {
-        foreach (var option in options)
+        if (options is null) return;
+
+        foreach (var (key, value) in options)
         {
-            Compiler.Context.Log.WarningSwitches[option.Key] = option.Value;
+            _compiler.Context.Log.WarningSwitches[key] = value;
         }
     }
 
-    class IRBuildTasks
+    private async Task<List<IRGoal>> ParallelBuildIRAsync()
     {
-        public ConcurrentQueue<GoalScript> Inputs = new ConcurrentQueue<GoalScript>();
-        public ConcurrentQueue<IRGoal> IRs = new ConcurrentQueue<IRGoal>();
-    }
+        var concurrentIRs = new ConcurrentQueue<IRGoal>();
 
-    private void BuildIR(IRBuildTasks tasks)
-    {
-        var goalLoader = new IRGenerator(Compiler.Context);
-        while (tasks.Inputs.TryDequeue(out GoalScript script))
+        await Parallel.ForEachAsync(_goalScripts, async (script, cancellationToken) =>
         {
-            using (var stream = new MemoryStream(script.ScriptBody))
+            var goalLoader = new IRGenerator(_compiler.Context);
+            using var stream = new MemoryStream(script.ScriptBody);
+            var ast = goalLoader.ParseGoal(script.Path, stream);
+
+            if (ast is not null)
             {
-                var ast = goalLoader.ParseGoal(script.Path, stream);
-
-                if (ast != null)
-                {
-                    var ir = goalLoader.GenerateGoalIR(ast);
-                    ir.Name = script.Name;
-                    tasks.IRs.Enqueue(ir);
-                }
-                else
-                {
-                    var msg = new Diagnostic(goalLoader.LastLocation, MessageLevel.Error, "X00", $"Could not parse goal file " + script.Name);
-                    Logger.CompilationDiagnostic(msg);
-                    HasErrors = true;
-                }
+                var ir = goalLoader.GenerateGoalIR(ast);
+                ir.Name = script.Name;
+                concurrentIRs.Enqueue(ir);
             }
-        }
-    }
+            else
+            {
+                var msg = new Diagnostic(goalLoader.LastLocation, MessageLevel.Error, "X00", $"Could not parse goal file {script.Name}");
 
-    private List<IRGoal> ParallelBuildIR()
-    {
-        var tasks = new IRBuildTasks();
-        foreach (var script in GoalScripts)
-        {
-            tasks.Inputs.Enqueue(script);
-        }
+                lock (_logger)
+                {
+                    _logger.CompilationDiagnostic(msg);
+                }
 
-        IRBuildTasks[] threadTasks = new[] { tasks, tasks, tasks, tasks };
-        Task.WhenAll(threadTasks.Select(task => Task.Run(() => { BuildIR(task); }))).Wait();
+                Interlocked.Exchange(ref _hasErrors, 1);
+            }
 
-        var sorted = new SortedDictionary<string, IRGoal>();
-        while (tasks.IRs.TryDequeue(out IRGoal goal))
+            await Task.CompletedTask;
+        });
+
+        var sorted = new SortedDictionary<string, IRGoal>(StringComparer.Ordinal);
+        while (concurrentIRs.TryDequeue(out var goal))
         {
             sorted[goal.Name] = goal;
         }
 
-        return sorted.Values.ToList();
+        return [.. sorted.Values];
     }
 
-    class PreprocessTasks
+    private async Task ParallelPreprocessAsync()
     {
-        public ConcurrentQueue<GoalScript> Inputs = new ConcurrentQueue<GoalScript>();
-    }
-
-    private void Preprocess(PreprocessTasks tasks)
-    {
-        var preprocessor = new Preprocessor();
-        while (tasks.Inputs.TryDequeue(out GoalScript script))
+        await Parallel.ForEachAsync(_goalScripts, (script, cancellationToken) =>
         {
             var scriptText = Encoding.UTF8.GetString(script.ScriptBody);
-            string preprocessed = null;
-            if (preprocessor.Preprocess(scriptText, ref preprocessed))
+
+            if (Preprocessor.Preprocess(scriptText, out string? preprocessed) && preprocessed is not null)
             {
                 script.ScriptBody = Encoding.UTF8.GetBytes(preprocessed);
             }
-        }
+
+            return ValueTask.CompletedTask;
+        });
     }
 
-    private void ParallelPreprocess()
-    {
-        var tasks = new PreprocessTasks();
-        foreach (var script in GoalScripts)
-        {
-            tasks.Inputs.Enqueue(script);
-        }
 
-        PreprocessTasks[] threadTasks = new[] { tasks, tasks, tasks, tasks };
-        Task.WhenAll(threadTasks.Select(task => Task.Run(() => { Preprocess(task); }))).Wait();
-    }
 
     private void LoadGameObjects(Resource resource)
     {
-        if (!resource.Regions.TryGetValue("Templates", out Region templates))
+        if (!resource.Regions.TryGetValue("Templates", out var templates))
         {
-            // TODO - log error
+            LogCompilerError(CompilerDiagnosticCodes.MissingTemplates, "Critical structural error: Failed to find required 'Templates' region node within the game asset resource metadata definition.");
             return;
         }
 
-        if (!templates.Children.TryGetValue("GameObjects", out List<LSLib.LS.Node> gameObjects))
+        if (!templates.Children.TryGetValue("GameObjects", out var gameObjects))
         {
-            // TODO - log error
+            LogCompilerError(CompilerDiagnosticCodes.MissingGameObjects, "Structural validation error: Resource templates do not contain any defined 'GameObjects' child layout data collections.");
             return;
         }
 
         foreach (var gameObject in gameObjects)
         {
-            if (gameObject.Attributes.TryGetValue("MapKey", out NodeAttribute objectGuid)
-                && gameObject.Attributes.TryGetValue("Name", out NodeAttribute objectName)
-                && gameObject.Attributes.TryGetValue("Type", out NodeAttribute objectType))
+            if (gameObject.Attributes.TryGetValue("MapKey", out var objectGuid) &&
+                gameObject.Attributes.TryGetValue("Name", out var objectName) &&
+                gameObject.Attributes.TryGetValue("Type", out var objectType))
             {
-                LSLib.LS.Story.Compiler.ValueType type = null;
-                switch ((string)objectType.Value)
+                // Fixed: Safely extract and assert values are non-null strings
+                if (objectGuid.Value is not string guidStr ||
+                    objectName.Value is not string nameStr ||
+                    objectType.Value is not string typeRaw)
                 {
-                    case "item": type = Compiler.Context.LookupType("ITEMGUID"); break;
-                    case "character": type = Compiler.Context.LookupType("CHARACTERGUID"); break;
-                    case "trigger": type = Compiler.Context.LookupType("TRIGGERGUID"); break;
-                    default:
-                        // TODO - log unknown type
-                        break;
+                    continue;
                 }
 
-                if (type != null)
+                var typeString = typeRaw.ToLowerInvariant();
+
+                LSLib.LS.Story.Compiler.ValueType? type = typeString switch
                 {
-                    var gameObjectInfo = new GameObjectInfo
+                    "item" => _compiler.Context.LookupType("ITEMGUID"),
+                    "character" => _compiler.Context.LookupType("CHARACTERGUID"),
+                    "trigger" => _compiler.Context.LookupType("TRIGGERGUID"),
+                    _ => null
+                };
+
+                if (type is not null)
+                {
+                    // Fixed: Assured key and properties are non-nullable strings
+                    _compiler.Context.GameObjects[guidStr] = new GameObjectInfo
                     {
-                        Name = objectName.Value + "_" + objectGuid.Value,
+                        Name = $"{nameStr}_{guidStr}",
                         Type = type
                     };
-                    Compiler.Context.GameObjects[(string)objectGuid.Value] = gameObjectInfo;
+                }
+                else
+                {
+                    // Fixed: Stripped out nullable warning traps from message interpolation
+                    var warnMsg = new Diagnostic(
+                        location: null,
+                        level: MessageLevel.Warning,
+                        code: CompilerDiagnosticCodes.UnknownGameObjectType,
+                        message: $"Ignored non-compiled asset: Game object key '{guidStr}' contains an unmappable story GUID layout type mapping signature: '{typeRaw}'."
+                    );
+
+                    lock (_logger)
+                    {
+                        _logger.CompilationDiagnostic(warnMsg);
+                    }
                 }
             }
         }
     }
 
+
+    private void LogCompilerError(string code, string message)
+    {
+        var msg = new Diagnostic(location: null, level: MessageLevel.Error, code: code, message: message);
+        lock (_logger)
+        {
+            _logger.CompilationDiagnostic(msg);
+        }
+        Interlocked.Exchange(ref _hasErrors, 1);
+    }
+
     private void LoadGlobals()
     {
-        foreach (var lsf in GameObjectLSFs)
+        foreach (var lsf in _gameObjectLSFs)
         {
-            using (var stream = new MemoryStream(lsf))
-            using (var reader = new LSFReader(stream))
-            {
-                var resource = reader.Read();
-                LoadGameObjects(resource);
-            }
+            using var stream = new MemoryStream(lsf);
+            using var reader = new LSFReader(stream);
+            LoadGameObjects(reader.Read());
         }
     }
 
     private void LoadGoals(ModInfo mod)
     {
+        if (mod?.Scripts is null) return;
+
         foreach (var file in mod.Scripts)
         {
-            using var scriptStream = FS.Open(file);
+            using var scriptStream = _fs.Open(file);
             using var reader = new BinaryReader(scriptStream);
 
-            var script = new GoalScript
+            _goalScripts.Add(new GoalScript
             {
                 Name = Path.GetFileNameWithoutExtension(file),
                 Path = file,
                 ScriptBody = reader.ReadBytes((int)scriptStream.Length)
-            };
-            GoalScripts.Add(script);
+            });
         }
     }
 
     private void LoadOrphanQueryIgnores(ModInfo mod)
     {
-        if (mod.OrphanQueryIgnoreList == null) return;
-        
-        using var ignoreStream = FS.Open(mod.OrphanQueryIgnoreList);
-        using var reader = new StreamReader(ignoreStream);
+        if (mod.OrphanQueryIgnoreList is null) return;
 
-        var ignoreRe = new Regex("^([a-zA-Z0-9_]+)\\s+([0-9]+)$");
-        while (!reader.EndOfStream)
+        using var ignoreStream = _fs.Open(mod.OrphanQueryIgnoreList);
+        using var reader = new StreamReader(ignoreStream, Encoding.UTF8);
+
+        while (reader.ReadLine() is { } ignoreLine)
         {
-            string ignoreLine = reader.ReadLine();
-            var match = ignoreRe.Match(ignoreLine);
+            var match = OrphanQueryRegex().Match(ignoreLine);
             if (match.Success)
             {
                 var signature = new FunctionNameAndArity(
-                    match.Groups[1].Value, Int32.Parse(match.Groups[2].Value));
-                Compiler.IgnoreUnusedDatabases.Add(signature);
+                    match.Groups[1].Value, int.Parse(match.Groups[2].Value));
+                _compiler.IgnoreUnusedDatabases.Add(signature);
             }
         }
     }
@@ -267,28 +274,24 @@ class ModCompiler : IDisposable
     {
         foreach (var file in mod.Globals)
         {
-            using var globalStream = FS.Open(file);
+            using var globalStream = _fs.Open(file);
             using var reader = new BinaryReader(globalStream);
-
-            var globalLsf = reader.ReadBytes((int)globalStream.Length);
-            GameObjectLSFs.Add(globalLsf);
+            _gameObjectLSFs.Add(reader.ReadBytes((int)globalStream.Length));
         }
 
         foreach (var file in mod.LevelObjects)
         {
-            using var objectStream = FS.Open(file);
+            using var objectStream = _fs.Open(file);
             using var reader = new BinaryReader(objectStream);
-
-            var levelLsf = reader.ReadBytes((int)objectStream.Length);
-            GameObjectLSFs.Add(levelLsf);
+            _gameObjectLSFs.Add(reader.ReadBytes((int)objectStream.Length));
         }
     }
 
     private void LoadMod(string modName)
     {
-        if (!Mods.Mods.TryGetValue(modName, out ModInfo mod))
+        if (!_mods.Mods.TryGetValue(modName, out var mod))
         {
-            throw new Exception($"Mod not found: {modName}");
+            throw new KeyNotFoundException($"Target mod metadata profile not found in solution context: {modName}");
         }
 
         LoadGoals(mod);
@@ -300,29 +303,32 @@ class ModCompiler : IDisposable
         }
     }
 
-    public bool Compile(string outputPath, string debugInfoPath, List<string> mods)
+    public async Task<bool> CompileAsync(string outputPath, string? debugInfoPath, List<string> mods)
     {
-        Logger.CompilationStarted();
-        HasErrors = false;
-        Compiler.Game = Game;
-        Compiler.AllowTypeCoercion = AllowTypeCoercion;
+        _logger.CompilationStarted();
+        Interlocked.Exchange(ref _hasErrors, 0);
+        _compiler.Game = Game;
+        _compiler.AllowTypeCoercion = AllowTypeCoercion;
 
         if (mods.Count > 0)
         {
-            Logger.TaskStarted("Building VFS");
-            FS = new VFS();
+            _logger.TaskStarted("Building VFS");
+
+            (_fs as IDisposable)?.Dispose();
+
+            _fs = new VFS();
             if (LoadPackages)
             {
-                FS.AttachGameDirectory(GameDataPath);
+                _fs.AttachGameDirectory(_gameDataPath);
             }
             else
             {
-                FS.AttachRoot(GameDataPath);
+                _fs.AttachRoot(_gameDataPath);
             }
-            FS.FinishBuild();
+            _fs.FinishBuild();
 
-            Logger.TaskStarted("Discovering module files");
-            var visitor = new ModPathVisitor(Mods, FS)
+            _logger.TaskStarted("Discovering module files");
+            var visitor = new ModPathVisitor(_mods, _fs)
             {
                 Game = Game,
                 CollectStoryGoals = true,
@@ -330,17 +336,20 @@ class ModCompiler : IDisposable
                 CollectLevels = CheckGameObjects
             };
             visitor.Discover();
-            Logger.TaskFinished();
+            _logger.TaskFinished();
 
-            Logger.TaskStarted("Loading module files");
+            _logger.TaskStarted("Loading module files");
             if (CheckGameObjects)
             {
+                var guidType = _compiler.Context.LookupType("GUIDSTRING") 
+                    ?? throw new InvalidDataException("Context missing core system type mapping: 'GUIDSTRING'");
+
                 var nullGameObject = new GameObjectInfo
                 {
                     Name = "NULL_00000000-0000-0000-0000-000000000000",
-                    Type = Compiler.Context.LookupType("GUIDSTRING")
+                    Type = guidType
                 };
-                Compiler.Context.GameObjects.Add("00000000-0000-0000-0000-000000000000", nullGameObject);
+                _compiler.Context.GameObjects.Add("00000000-0000-0000-0000-000000000000", nullGameObject);
             }
 
             foreach (var modName in mods)
@@ -348,136 +357,130 @@ class ModCompiler : IDisposable
                 LoadMod(modName);
             }
 
-            string storyHeaderFile = null;
-            string typeCoercionWhitelistFile = null;
-            var modsSearchPath = mods.ToList();
-            modsSearchPath.Reverse();
-            foreach (var modName in modsSearchPath)
-            {
-                if (storyHeaderFile == null && Mods.Mods[modName].StoryHeaderFile != null)
-                {
-                    storyHeaderFile = Mods.Mods[modName].StoryHeaderFile;
-                }
+            string? storyHeaderFile = null;
+            string? typeCoercionWhitelistFile = null;
 
-                if (typeCoercionWhitelistFile == null && Mods.Mods[modName].TypeCoercionWhitelistFile != null)
-                {
-                    typeCoercionWhitelistFile = Mods.Mods[modName].TypeCoercionWhitelistFile;
-                }
+            foreach (var modName in mods.AsEnumerable().Reverse())
+            {
+                storyHeaderFile ??= _mods.Mods[modName].StoryHeaderFile;
+                typeCoercionWhitelistFile ??= _mods.Mods[modName].TypeCoercionWhitelistFile;
             }
 
-            if (storyHeaderFile != null)
+            if (storyHeaderFile is not null)
             {
-                using var storyStream = FS.Open(storyHeaderFile);
+                using var storyStream = _fs.Open(storyHeaderFile);
                 LoadStoryHeaders(storyStream);
             }
             else
             {
-                Logger.CompilationDiagnostic(new Diagnostic(null, MessageLevel.Error, "X00", "Unable to locate story header file (story_header.div)"));
-                HasErrors = true;
+                _logger.CompilationDiagnostic(new Diagnostic(null, MessageLevel.Error, "X00", "Unable to locate story header file (story_header.div)"));
+                Interlocked.Exchange(ref _hasErrors, 1);
             }
 
-            if (typeCoercionWhitelistFile != null)
+            if (typeCoercionWhitelistFile is not null)
             {
-                using var typeCoercionStream = FS.Open(typeCoercionWhitelistFile);
+                using var typeCoercionStream = _fs.Open(typeCoercionWhitelistFile);
                 LoadTypeCoercionWhitelist(typeCoercionStream);
-                Compiler.TypeCoercionWhitelist = TypeCoercionWhitelist;
+                _compiler.TypeCoercionWhitelist = _typeCoercionWhitelist;
             }
 
-            Logger.TaskFinished();
+            _logger.TaskFinished();
         }
 
         if (CheckGameObjects)
         {
-            Logger.TaskStarted("Loading game objects");
+            _logger.TaskStarted("Loading game objects");
             LoadGlobals();
-            Logger.TaskFinished();
+            _logger.TaskFinished();
         }
         else
         {
-            Compiler.Context.Log.WarningSwitches[DiagnosticCode.UnresolvedGameObjectName] = false;
+            _compiler.Context.Log.WarningSwitches[DiagnosticCode.UnresolvedGameObjectName] = false;
         }
 
         if (OsiExtender)
         {
-            Logger.TaskStarted("Precompiling scripts");
-            ParallelPreprocess();
-            Logger.TaskFinished();
+            _logger.TaskStarted("Precompiling scripts");
+            await ParallelPreprocessAsync();
+            _logger.TaskFinished();
         }
 
-        var asts = new Dictionary<String, ASTGoal>();
-        var goalLoader = new IRGenerator(Compiler.Context);
-
-        Logger.TaskStarted("Generating IR");
-        var orderedGoalAsts = ParallelBuildIR();
-        foreach (var goal in orderedGoalAsts)
-        {
-            Compiler.AddGoal(goal);
-        }
-        Logger.TaskFinished();
-
-
-        bool updated;
-        var iter = 1;
-        do
-        {
-            Logger.TaskStarted($"Propagating rule types {iter}");
-            updated = Compiler.PropagateRuleTypes();
-            Logger.TaskFinished();
-
-            if (iter++ > 10)
+            _logger.TaskStarted("Generating IR");
+            var orderedGoalAsts = await ParallelBuildIRAsync();
+            foreach (var goal in orderedGoalAsts)
             {
-                Compiler.Context.Log.Error(null, DiagnosticCode.InternalError, 
-                    "Maximal number of rule propagation retries exceeded");
-                break;
+                _compiler.AddGoal(goal);
             }
-        } while (updated);
+            _logger.TaskFinished();
 
-        Logger.TaskStarted("Checking for unresolved references");
-        Compiler.VerifyIR();
-        Logger.TaskFinished();
+            var compilerGoalsList = orderedGoalAsts;
+            var iter = 1;
 
-        foreach (var message in Compiler.Context.Log.Log)
+            bool updated;
+            do
+            {
+                _logger.TaskStarted($"Propagating rule types {iter}");
+                updated = _compiler.PropagateRuleTypes(compilerGoalsList);
+                _logger.TaskFinished();
+
+                if (iter++ > 10)
+                {
+                    _compiler.Context.Log.Error(null, DiagnosticCode.InternalError, "Maximal number of rule propagation retries exceeded");
+                    break;
+                }
+            } while (updated);
+
+            _logger.TaskStarted("Checking for unresolved references");
+            _compiler.VerifyIR(compilerGoalsList);
+            _logger.TaskFinished();
+
+            foreach (var message in _compiler.Context.Log.Log)
         {
-            Logger.CompilationDiagnostic(message);
+            _logger.CompilationDiagnostic(message);
             if (message.Level == MessageLevel.Error)
             {
-                HasErrors = true;
+                Interlocked.Exchange(ref _hasErrors, 1);
             }
         }
 
         if (!HasErrors && !CheckOnly)
         {
-            Logger.TaskStarted("Generating story nodes");
-            var emitter = new StoryEmitter(Compiler.Context);
-            if (debugInfoPath != null)
+            _logger.TaskStarted("Generating story nodes");
+            var emitter = new StoryEmitter(_compiler.Context);
+            if (debugInfoPath is not null)
             {
                 emitter.EnableDebugInfo();
             }
 
             var story = emitter.EmitStory();
-            Logger.TaskFinished();
+            _logger.TaskFinished();
 
-            Logger.TaskStarted("Saving story binary");
-            using (var file = new FileStream(outputPath, FileMode.Create, FileAccess.Write))
+            _logger.TaskStarted("Saving story binary");
+            using (var file = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None))
             {
-                var writer = new StoryWriter();
-                writer.Write(file, story, false);
+                StoryWriter.Write(file, story, false);
             }
-            Logger.TaskFinished();
+            _logger.TaskFinished();
 
-            if (debugInfoPath != null)
+            if (debugInfoPath is not null)
             {
-                Logger.TaskStarted("Saving debug info");
-                using (var file = new FileStream(debugInfoPath, FileMode.Create, FileAccess.Write))
+                _logger.TaskStarted("Saving debug info");
+            
+                if (emitter.DebugInfo is { } validDebugInfo)
                 {
-                    var writer = new DebugInfoSaver();
-                    writer.Save(file, emitter.DebugInfo);
+                    using var file = new FileStream(debugInfoPath, FileMode.Create, FileAccess.Write, FileShare.None);
+                    DebugInfoSaver.Save(file, validDebugInfo);
                 }
-                Logger.TaskFinished();
+                else
+                {
+                    _logger.CompilationDiagnostic(new Diagnostic(null, MessageLevel.Warning, "X01", "Debug info path requested but emitter did not provide debug info data."));
+                }
+                _logger.TaskFinished();
             }
         }
 
-        Logger.CompilationFinished(!HasErrors);
+        _logger.CompilationFinished(!HasErrors);
         return !HasErrors;
     }
+
 }

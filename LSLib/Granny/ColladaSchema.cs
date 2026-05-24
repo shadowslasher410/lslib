@@ -18,6 +18,7 @@ using System.CodeDom.Compiler;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -9637,7 +9638,6 @@ namespace LSLib.Granny
             set { idField = value; }
         }
 
-        /// <remarks />
         [XmlAttribute(DataType = "NCName")]
         public string name
         {
@@ -9646,7 +9646,6 @@ namespace LSLib.Granny
         }
     }
 
-    /// <remarks />
     [GeneratedCode("xsd", "4.0.30319.1")]
     [Serializable]
     [DebuggerStepThrough]
@@ -9666,14 +9665,12 @@ namespace LSLib.Granny
         private string nameField;
         private node[] nodeField;
 
-        /// <remarks />
         public asset asset
         {
             get { return assetField; }
             set { assetField = value; }
         }
 
-        /// <remarks />
         [XmlElement("node")]
         public node[] node
         {
@@ -9681,7 +9678,6 @@ namespace LSLib.Granny
             set { nodeField = value; }
         }
 
-        /// <remarks />
         [XmlElement("evaluate_scene")]
         public visual_sceneEvaluate_scene[] evaluate_scene
         {
@@ -9689,7 +9685,6 @@ namespace LSLib.Granny
             set { evaluate_sceneField = value; }
         }
 
-        /// <remarks />
         [XmlElement("extra")]
         public extra[] extra
         {
@@ -9697,7 +9692,6 @@ namespace LSLib.Granny
             set { extraField = value; }
         }
 
-        /// <remarks />
         [XmlAttribute(DataType = "ID")]
         public string id
         {
@@ -9705,7 +9699,6 @@ namespace LSLib.Granny
             set { idField = value; }
         }
 
-        /// <remarks />
         [XmlAttribute(DataType = "NCName")]
         public string name
         {
@@ -9714,7 +9707,6 @@ namespace LSLib.Granny
         }
     }
 
-    /// <remarks />
     [GeneratedCode("xsd", "4.0.30319.1")]
     [Serializable]
     [DebuggerStepThrough]
@@ -9725,7 +9717,6 @@ namespace LSLib.Granny
         private string nameField;
         private visual_sceneEvaluate_sceneRender[] renderField;
 
-        /// <remarks />
         [XmlElement("render")]
         public visual_sceneEvaluate_sceneRender[] render
         {
@@ -9733,7 +9724,6 @@ namespace LSLib.Granny
             set { renderField = value; }
         }
 
-        /// <remarks />
         [XmlAttribute(DataType = "NCName")]
         public string name
         {
@@ -9742,7 +9732,6 @@ namespace LSLib.Granny
         }
     }
 
-    /// <remarks />
     [GeneratedCode("xsd", "4.0.30319.1")]
     [Serializable]
     [DebuggerStepThrough]
@@ -9754,7 +9743,6 @@ namespace LSLib.Granny
         private instance_effect instance_effectField;
         private string[] layerField;
 
-        /// <remarks />
         [XmlElement("layer", DataType = "NCName")]
         public string[] layer
         {
@@ -9762,14 +9750,12 @@ namespace LSLib.Granny
             set { layerField = value; }
         }
 
-        /// <remarks />
         public instance_effect instance_effect
         {
             get { return instance_effectField; }
             set { instance_effectField = value; }
         }
 
-        /// <remarks />
         [XmlAttribute(DataType = "anyURI")]
         public string camera_node
         {
@@ -9778,7 +9764,6 @@ namespace LSLib.Granny
         }
     }
 
-    /// <remarks />
     [GeneratedCode("xsd", "4.0.30319.1")]
     [Serializable]
     [DebuggerStepThrough]
@@ -9791,7 +9776,6 @@ namespace LSLib.Granny
 
         private InstanceWithExtra instance_visual_sceneField;
 
-        /// <remarks />
         [XmlElement("instance_physics_scene")]
         public InstanceWithExtra[] instance_physics_scene
         {
@@ -9799,14 +9783,12 @@ namespace LSLib.Granny
             set { instance_physics_sceneField = value; }
         }
 
-        /// <remarks />
         public InstanceWithExtra instance_visual_scene
         {
             get { return instance_visual_sceneField; }
             set { instance_visual_sceneField = value; }
         }
 
-        /// <remarks />
         [XmlElement("extra")]
         public extra[] extra
         {
@@ -9815,20 +9797,15 @@ namespace LSLib.Granny
         }
     }
 
-    /// <remarks />
     [GeneratedCode("xsd", "4.0.30319.1")]
     [Serializable]
     [XmlType(Namespace = "http://www.collada.org/2005/11/COLLADASchema")]
     public enum VersionType
     {
-        /// <remarks />
         [XmlEnum("1.4.0")] Item140,
-
-        /// <remarks />
         [XmlEnum("1.4.1")] Item141,
     }
 
-    /// <remarks />
     [GeneratedCode("xsd", "4.0.30319.1")]
     [Serializable]
     [DebuggerStepThrough]
@@ -9838,8 +9815,6 @@ namespace LSLib.Granny
     public class ellipsoid
     {
         private string sizeField;
-
-        /// <remarks />
         public string size
         {
             get { return sizeField; }
@@ -9847,10 +9822,6 @@ namespace LSLib.Granny
         }
     }
 
-
-    /// <summary>
-    ///   Extend COLLADA class to provide convertion helpers
-    /// </summary>
     public partial class COLLADA
     {
         private static Regex regex = new Regex(@"\s+");
@@ -9863,7 +9834,6 @@ namespace LSLib.Granny
             StringBuilder text = new StringBuilder();
             if (typeof (T) == typeof (double))
             {
-                // If type is double, then use a plain ToString with no exponent
                 for (int i = 0; i < array.Count; i++)
                 {
                     object value1 = array[i];
@@ -9925,47 +9895,55 @@ namespace LSLib.Granny
         }
 
 
+        [RequiresUnreferencedCode("COLLADA XML structural schema deserialization demands preserving public properties reflecting metadata types mappings.")]
         public static COLLADA Load(string fileName)
         {
-            FileStream stream = new FileStream(fileName, FileMode.Open);
-            COLLADA result;
-            try
+            ArgumentException.ThrowIfNullOrEmpty(fileName);
+
+            if (!File.Exists(fileName))
             {
-                result = Load(stream);
+                throw new FileNotFoundException($"Target Collada source layout document not found: '{fileName}'");
             }
-            finally
-            {
-                stream.Close();
-            }
-            return result;
+            using var stream = new FileStream(fileName, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.Asynchronous);
+            return Load(stream);
         }
 
+        [RequiresUnreferencedCode("COLLADA XML structural schema deserialization demands preserving public properties reflecting metadata types mappings.")]
+        [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2026:RequiresUnreferencedCode",
+        Justification = "The entire core hierarchy tracking contract types mapping structure of the COLLADA class properties is explicitly whitelisted in assembly descriptors.")]
         public static COLLADA Load(Stream stream)
         {
-            StreamReader str = new StreamReader(stream);
-            XmlSerializer xSerializer = new XmlSerializer(typeof(COLLADA));
+            ArgumentNullException.ThrowIfNull(stream);
+            using var str = new StreamReader(stream, System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 4096, leaveOpen: true);
+            var xSerializer = new XmlSerializer(typeof(COLLADA));
 
-            return (COLLADA)xSerializer.Deserialize(str);
+            return (COLLADA)(xSerializer.Deserialize(str) ?? throw new InvalidDataException("Collada parser stream extraction failure: Evaluated payload document returned null."));
         }
 
+        [RequiresUnreferencedCode("COLLADA XML structural schema serialization demands preserving public properties reflecting metadata types mappings.")]
         public void Save(string fileName)
         {
-            FileStream stream = new FileStream(fileName, FileMode.Create);
-            try
-            {
-                Save(stream);
-            }
-            finally
-            {
-                stream.Close();
-            }
+            ArgumentException.ThrowIfNullOrEmpty(fileName);
+            using var stream = new FileStream(fileName, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous);
+            this.Save(stream);
         }
 
+        [RequiresUnreferencedCode("COLLADA XML structural schema serialization demands preserving public properties reflecting metadata types mappings.")]
+        [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2026:RequiresUnreferencedCode",
+        Justification = "The entire core hierarchy tracking contract types mapping structure of the COLLADA class properties is explicitly whitelisted in assembly descriptors.")]
         public void Save(Stream stream)
         {
-            XmlTextWriter writer = new XmlTextWriter(stream, Encoding.UTF8);
-            XmlSerializer xSerializer = new XmlSerializer(typeof(COLLADA));
-            writer.Formatting = Formatting.Indented;
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var settings = new XmlWriterSettings
+            {
+                Encoding = Encoding.UTF8,
+                Indent = true,
+                CloseOutput = false
+            };
+
+            using var writer = XmlWriter.Create(stream, settings);
+            var xSerializer = new XmlSerializer(typeof(COLLADA));
             xSerializer.Serialize(writer, this);
         }
     }

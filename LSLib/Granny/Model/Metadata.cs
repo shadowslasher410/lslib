@@ -1,64 +1,75 @@
-﻿using LSLib.Granny.GR2;
+﻿using System;
+using LSLib.Granny.GR2;
 using LSLib.LS;
 
 namespace LSLib.Granny.Model;
 
 public class ArtToolInfo
 {
-    public String FromArtToolName;
-    public Int32 ArtToolMajorRevision;
-    public Int32 ArtToolMinorRevision;
+    public string FromArtToolName = string.Empty;
+    public int ArtToolMajorRevision;
+    public int ArtToolMinorRevision;
+
     [Serialization(MinVersion = 0x80000011)]
-    public Int32 ArtToolPointerSize;
-    public Single UnitsPerMeter;
+    public int ArtToolPointerSize;
+    public float UnitsPerMeter;
+
     [Serialization(ArraySize = 3)]
-    public Single[] Origin;
+    public float[] Origin = [0f, 0f, 0f];
+
     [Serialization(ArraySize = 3)]
-    public Single[] RightVector;
+    public float[] RightVector = [1f, 0f, 0f];
+
     [Serialization(ArraySize = 3)]
-    public Single[] UpVector;
+    public float[] UpVector = [0f, 1f, 0f];
+
     [Serialization(ArraySize = 3)]
-    public Single[] BackVector;
+    public float[] BackVector = [0f, 0f, 1f];
+
     [Serialization(Type = MemberType.VariantReference, MinVersion = 0x80000011)]
-    public object ExtendedData;
+    public object? ExtendedData;
 
     public static ArtToolInfo CreateDefault()
     {
         return new ArtToolInfo
         {
-            FromArtToolName = "",
+            FromArtToolName = string.Empty,
             ArtToolMajorRevision = 1,
             ArtToolMinorRevision = 0,
             ArtToolPointerSize = 64,
-            UnitsPerMeter = 1,
-            Origin = [0, 0, 0]
+            UnitsPerMeter = 1.0f,
+            Origin = [0f, 0f, 0f],
+            RightVector = [1f, 0f, 0f],
+            UpVector = [0f, 1f, 0f],
+            BackVector = [0f, 0f, 1f]
         };
     }
 
     public void SetYUp()
     {
-        RightVector = [1, 0, 0];
-        UpVector = [0, 1, 0];
-        BackVector = [0, 0, -1];
+        RightVector = [1f, 0f, 0f];
+        UpVector = [0f, 1f, 0f];
+        BackVector = [0f, 0f, -1f];
     }
 
     public void SetZUp()
     {
-        RightVector = [1, 0, 0];
-        UpVector = [0, 0, 1];
-        BackVector = [0, 1, 0];
+        RightVector = [1f, 0f, 0f];
+        UpVector = [0f, 0f, 1f];
+        BackVector = [0f, 1f, 0f];
     }
 }
 
 public class ExporterInfo
 {
-    public String ExporterName;
-    public Int32 ExporterMajorRevision;
-    public Int32 ExporterMinorRevision;
-    public Int32 ExporterCustomization;
-    public Int32 ExporterBuildNumber;
+    public string ExporterName = string.Empty;
+    public int ExporterMajorRevision;
+    public int ExporterMinorRevision;
+    public int ExporterCustomization;
+    public int ExporterBuildNumber;
+
     [Serialization(Type = MemberType.VariantReference, MinVersion = 0x80000011)]
-    public object ExtendedData;
+    public object? ExtendedData;
 
     public static ExporterInfo MakeCurrent()
     {

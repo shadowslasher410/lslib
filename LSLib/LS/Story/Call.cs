@@ -1,23 +1,30 @@
-﻿namespace LSLib.LS.Story;
+﻿using System;
+using System.Collections.Generic;
+using System.IO;
 
-public class Call : OsirisSerializable
+namespace LSLib.LS.Story;
+
+public class Call : IOsirisSerializable
 {
-    public string Name;
-    public List<TypedValue> Parameters;
-    public bool Negate;
-    public Int32 GoalIdOrDebugHook;
+    public string Name { get; set; } = string.Empty;
+    public List<TypedValue> Parameters { get; set; } = [];
+    public bool Negate { get; set; }
+    public int GoalIdOrDebugHook { get; set; }
 
     public void Read(OsiReader reader)
     {
-        Name = reader.ReadString();
+        ArgumentNullException.ThrowIfNull(reader);
+
+        Name = reader.ReadString() ?? string.Empty;
         if (Name.Length > 0)
         {
-            var hasParams = reader.ReadByte();
+            byte hasParams = reader.ReadByte();
             if (hasParams > 0)
             {
-                Parameters = new List<TypedValue>();
-                var numParams = reader.ReadByte();
-                while (numParams-- > 0)
+                byte numParams = reader.ReadByte();
+                Parameters = new List<TypedValue>(numParams);
+
+                for (int i = 0; i < numParams; i++)
                 {
                     TypedValue param;
                     if (reader.Ver >= OsiVersion.VerValueFlags)
@@ -26,7 +33,7 @@ public class Call : OsirisSerializable
                     }
                     else
                     {
-                        var type = reader.ReadByte();
+                        byte type = reader.ReadByte();
                         if (type == 1)
                             param = new Variable();
                         else
@@ -36,8 +43,16 @@ public class Call : OsirisSerializable
                     Parameters.Add(param);
                 }
             }
+            else
+            {
+                Parameters = [];
+            }
 
             Negate = reader.ReadBoolean();
+        }
+        else
+        {
+            Parameters = [];
         }
 
         GoalIdOrDebugHook = reader.ReadInt32();
@@ -45,14 +60,16 @@ public class Call : OsirisSerializable
 
     public void Write(OsiWriter writer)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+
         writer.Write(Name);
         if (Name.Length > 0)
         {
-            writer.Write(Parameters != null);
-            if (Parameters != null)
+            writer.Write(Parameters is { Count: > 0 });
+            if (Parameters is { Count: > 0 })
             {
                 writer.Write((byte)Parameters.Count);
-                foreach (var param in Parameters)
+                foreach (TypedValue param in Parameters)
                 {
                     if (writer.Ver < OsiVersion.VerValueFlags)
                     {
@@ -70,17 +87,18 @@ public class Call : OsirisSerializable
 
     public void DebugDump(TextWriter writer, Story story)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(story);
+
         if (Name.Length > 0)
         {
             if (Negate) writer.Write("!");
             writer.Write("{0}(", Name);
-            if (Parameters != null)
+
+            for (int i = 0; i < Parameters.Count; i++)
             {
-                for (var i = 0; i < Parameters.Count; i++)
-                {
-                    Parameters[i].DebugDump(writer, story);
-                    if (i < Parameters.Count - 1) writer.Write(", ");
-                }
+                Parameters[i].DebugDump(writer, story);
+                if (i < Parameters.Count - 1) writer.Write(", ");
             }
 
             writer.Write(") ");
@@ -94,27 +112,35 @@ public class Call : OsirisSerializable
             }
             else
             {
-                var goal = story.Goals[(uint)GoalIdOrDebugHook];
-                writer.Write("<Complete goal #{0} {1}>", GoalIdOrDebugHook, goal.Name);
+                if (story.Goals.TryGetValue((uint)GoalIdOrDebugHook, out Goal? goal))
+                {
+                    writer.Write("<Complete goal #{0} {1}>", GoalIdOrDebugHook, goal.Name);
+                }
+                else
+                {
+                    writer.Write("<Complete goal #{0} (Unresolved Goal Reference)>", GoalIdOrDebugHook);
+                }
             }
         }
     }
 
     public void MakeScript(TextWriter writer, Story story, Tuple tuple, bool printTypes)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(story);
+        ArgumentNullException.ThrowIfNull(tuple);
+
         if (Name.Length > 0)
         {
             if (Negate) writer.Write("NOT ");
             writer.Write("{0}(", Name);
-            if (Parameters != null)
+
+            for (int i = 0; i < Parameters.Count; i++)
             {
-                for (var i = 0; i < Parameters.Count; i++)
-                {
-                    var param = Parameters[i];
-                    param.MakeScript(writer, story, tuple, printTypes);
-                    if (i < Parameters.Count - 1)
-                        writer.Write(", ");
-                }
+                TypedValue param = Parameters[i];
+                param.MakeScript(writer, story, tuple, printTypes);
+                if (i < Parameters.Count - 1)
+                    writer.Write(", ");
             }
 
             writer.Write(")");

@@ -5,35 +5,37 @@ public enum RuleType
     Rule,
     Proc,
     Query
-};
+}
 
 public class RuleNode : RelNode
 {
-    public List<Call> Calls;
-    public List<Variable> Variables;
-    public UInt32 Line;
-    public GoalReference DerivedGoalRef;
-    public bool IsQuery;
+    public List<Call> Calls { get; set; } = [];
+    public List<Variable> Variables { get; set; } = [];
+    public uint Line { get; set; }
+    public GoalReference DerivedGoalRef { get; set; } = null!;
+    public bool IsQuery { get; set; }
 
     public override void Read(OsiReader reader)
     {
+        ArgumentNullException.ThrowIfNull(reader);
+
         base.Read(reader);
         Calls = reader.ReadList<Call>();
 
-        Variables = new List<Variable>();
-        var variables = reader.ReadByte();
+        byte variables = reader.ReadByte();
+        Variables = new List<Variable>(variables);
         while (variables-- > 0)
         {
             if (reader.Ver < OsiVersion.VerValueFlags)
             {
-                var type = reader.ReadByte();
+                byte type = reader.ReadByte();
                 if (type != 1) throw new InvalidDataException("Illegal value type in rule variable list");
             }
             var variable = new Variable();
             variable.Read(reader);
             if (variable.Adapted)
             {
-                variable.VariableName = String.Format("_Var{0}", Variables.Count + 1);
+                variable.VariableName = $"_Var{Variables.Count + 1}";
             }
 
             Variables.Add(variable);
@@ -49,11 +51,13 @@ public class RuleNode : RelNode
 
     public override void Write(OsiWriter writer)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+
         base.Write(writer);
-        writer.WriteList<Call>(Calls);
+        writer.WriteList(Calls);
 
         writer.Write((byte)Variables.Count);
-        foreach (var variable in Variables)
+        foreach (Variable variable in Variables)
         {
             if (writer.Ver < OsiVersion.VerValueFlags)
             {
@@ -67,98 +71,99 @@ public class RuleNode : RelNode
             writer.Write(IsQuery);
     }
 
-    public override Type NodeType()
+    public override Node.Type NodeType()
     {
-        return Type.Rule;
+        return Node.Type.Rule;
     }
 
     public override string TypeName()
     {
-        if (IsQuery)
-            return "Query Rule";
-        else
-            return "Rule";
+        return IsQuery ? "Query Rule" : "Rule";
     }
 
     public override void DebugDump(TextWriter writer, Story story)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(story);
+
         base.DebugDump(writer, story);
 
         writer.WriteLine("    Variables: ");
-        foreach (var v in Variables)
+        foreach (Variable v in Variables)
         {
             writer.Write("        ");
             v.DebugDump(writer, story);
-            writer.WriteLine("");
+            writer.WriteLine();
         }
 
         writer.WriteLine("    Calls: ");
-        foreach (var call in Calls)
+        foreach (Call call in Calls)
         {
             writer.Write("        ");
             call.DebugDump(writer, story);
-            writer.WriteLine("");
+            writer.WriteLine();
         }
     }
 
-    public Node GetRoot(Story story)
+    public Node GetRoot(Story _)
     {
         Node parent = this;
-        for (;;)
+        while (parent is not null)
         {
-            if (parent is RelNode)
+            if (parent is RelNode rel)
             {
-                var rel = parent as RelNode;
-                parent = rel.ParentRef.Resolve();
+                if (rel.ParentRef is null) break;
+                Node? resolved = rel.ParentRef.Resolve();
+                if (resolved is null) break;
+                parent = resolved;
             }
-            else if (parent is JoinNode)
+            else if (parent is JoinNode join)
             {
-                var join = parent as JoinNode;
-                parent = join.LeftParentRef.Resolve();
+                if (join.LeftParentRef is null) break;
+                Node? resolved = join.LeftParentRef.Resolve();
+                if (resolved is null) break;
+                parent = resolved;
             }
             else
             {
                 return parent;
             }
         }
+        return parent!;
     }
 
     public RuleType? GetRuleType(Story story)
     {
-        var root = GetRoot(story);
+        ArgumentNullException.ThrowIfNull(story);
+
+        Node root = GetRoot(story);
         if (root is DatabaseNode)
         {
             return RuleType.Rule;
         }
         else if (root is ProcNode)
         {
-            var querySig = root.Name + "__DEF__/" + root.NumParams.ToString();
-            var sig = root.Name + "/" + root.NumParams.ToString();
+            string rootName = root.Name ?? string.Empty;
+            string querySig = $"{rootName}__DEF__/{root.NumParams}";
+            string sig = $"{rootName}/{root.NumParams}";
 
-            if (!story.FunctionSignatureMap.TryGetValue(querySig, out Function func)
+            if (!story.FunctionSignatureMap.TryGetValue(querySig, out Function? func)
                 && !story.FunctionSignatureMap.TryGetValue(sig, out func))
             {
                 return null;
             }
 
-            switch (func.Type)
+            return func.Type switch
             {
-                case FunctionType.Event:
-                    return RuleType.Rule;
-
-                case FunctionType.Proc:
-                    return RuleType.Proc;
-
-                case FunctionType.UserQuery:
-                    return RuleType.Query;
-
-                default:
-                    throw new InvalidDataException($"Unsupported root function type: {func.Type}");
-            }
+                FunctionType.Event => RuleType.Rule,
+                FunctionType.Proc => RuleType.Proc,
+                FunctionType.UserQuery => RuleType.Query,
+                _ => throw new InvalidDataException($"Unsupported root function type context parameters: {func.Type}")
+            };
         }
         else
         {
-            throw new InvalidDataException("Cannot export rules with this root node");
+            throw new InvalidDataException("Cannot export rules with this specific target root node type layout configuration.");
         }
     }
 
@@ -176,11 +181,11 @@ public class RuleNode : RelNode
 
     public override void MakeScript(TextWriter writer, Story story, Tuple tuple, bool printTypes)
     {
-        var ruleType = GetRuleType(story);
-        if (ruleType == null)
-        {
-            return;
-        }
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(story);
+
+        RuleType? ruleType = GetRuleType(story);
+        if (ruleType is null) return;
 
         switch (ruleType)
         {
@@ -189,34 +194,43 @@ public class RuleNode : RelNode
             case RuleType.Rule: writer.WriteLine("IF"); break;
         }
 
-        var initialTuple = MakeInitialTuple();
-        if (AdapterRef.IsValid)
+        Tuple initialTuple = MakeInitialTuple();
+        if (AdapterRef is not null && AdapterRef.IsValid)
         {
-            var adapter = AdapterRef.Resolve();
-            initialTuple = adapter.Adapt(initialTuple);
+            Adapter? adapter = AdapterRef.Resolve();
+            if (adapter is not null)
+            {
+                initialTuple = adapter.Adapt(initialTuple);
+            }
         }
 
         printTypes = printTypes || ruleType == RuleType.Proc || ruleType == RuleType.Query;
-        ParentRef.Resolve().MakeScript(writer, story, initialTuple, printTypes);
-        writer.WriteLine("THEN");
-        foreach (var call in Calls)
+
+        if (ParentRef is not null && ParentRef.IsValid)
         {
-            call.MakeScript(writer, story, initialTuple, false);
-            writer.WriteLine(";");
+            Node? parentNode = ParentRef.Resolve();
+            parentNode?.MakeScript(writer, story, initialTuple, printTypes);
+        }
+
+        writer.WriteLine("THEN");
+        foreach (Call call in Calls)
+        {
+            if (call is not null)
+            {
+                call.MakeScript(writer, story, initialTuple, false);
+                writer.WriteLine(";");
+            }
         }
     }
 
     private void RemoveQueryPostfix(Story story)
     {
-        // Remove the __DEF__ postfix that is added to the end of Query nodes
         if (IsQuery)
         {
-            var ruleRoot = GetRoot(story);
-            if (ruleRoot.Name != null &&
-                ruleRoot.Name.Length > 7 &&
-                ruleRoot.Name.Substring(ruleRoot.Name.Length - 7) == "__DEF__")
+            Node ruleRoot = GetRoot(story);
+            if (ruleRoot?.Name is not null && ruleRoot.Name.Length > 7 && ruleRoot.Name.EndsWith("__DEF__", StringComparison.Ordinal))
             {
-                ruleRoot.Name = ruleRoot.Name.Substring(0, ruleRoot.Name.Length - 7);
+                ruleRoot.Name = ruleRoot.Name[..^7];
             }
         }
     }
@@ -231,15 +245,16 @@ public class RuleNode : RelNode
     {
         base.PreSave(story);
 
-        // Re-add the __DEF__ postfix that is added to the end of Query nodes
         if (IsQuery)
         {
-            var ruleRoot = GetRoot(story);
-            if (ruleRoot.Name != null &&
-                (ruleRoot.Name.Length < 7 ||
-                ruleRoot.Name.Substring(ruleRoot.Name.Length - 7) != "__DEF__"))
+            Node ruleRoot = GetRoot(story);
+            if (ruleRoot is not null)
             {
-                ruleRoot.Name += "__DEF__";
+                string name = ruleRoot.Name ?? string.Empty;
+                if (name.Length < 7 || !name.EndsWith("__DEF__", StringComparison.Ordinal))
+                {
+                    ruleRoot.Name = $"{name}__DEF__";
+                }
             }
         }
     }

@@ -1,126 +1,230 @@
 ﻿using LSLib.LS.Story.Compiler;
-using QUT.Gppg;
-using System.Text.RegularExpressions;
+using Superpower;
+using Superpower.Parsers;
+using Superpower.Tokenizers;
+using System.Globalization;
 
 namespace LSLib.LS.Story.HeaderParser;
 
-public abstract class HeaderScanBase : AbstractScanner<ASTNode, LexLocation>
+/// <summary>
+/// Definitive, strongly-typed token representation enum structure for the story header combinator parser.
+/// </summary>
+public enum HeaderTokens
 {
-    protected virtual bool yywrap() { return true; }
-
-    protected ASTLiteral MakeLiteral(string lit) => new ASTLiteral()
-    {
-        Literal = lit
-    };
-
-    protected ASTLiteral MakeString(string lit)
-    {
-        return MakeLiteral(Regex.Unescape(lit.Substring(1, lit.Length - 2)));
-    }
+    None,
+    Bad,
+    Identifier,
+    IntegerLiteral,
+    KeywordType,
+    KeywordAlias,
+    OpenParenthesis,
+    CloseParenthesis,
+    Comma,
+    DirectionIn,
+    DirectionOut,
+    Dot,
+    OpenBrace,
+    CloseBrace,
+    OpenBracket,
+    CloseBracket,
+    Option,
+    SysCall,
+    SysQuery,
+    Query,
+    Call,
+    Event
 }
 
-public partial class HeaderParser
+/// <summary>
+/// High-performance lexical tokenizer tracking script header symbols allocation-free.
+/// </summary>
+public static class HeaderTokenizer
 {
-    public HeaderParser(HeaderScanner scnr) : base(scnr)
-    {
-    }
+    public static readonly Tokenizer<HeaderTokens> Instance =
+         new TokenizerBuilder<HeaderTokens>()
+             .Ignore(Character.WhiteSpace)
+             .Ignore(Comment.CStyle)
+             .Ignore(Comment.CPlusPlusStyle)
+             .Match(Span.EqualTo("option"), HeaderTokens.Option)
+             .Match(Span.EqualTo("type"), HeaderTokens.KeywordType)
+             .Match(Span.EqualTo("alias_type"), HeaderTokens.KeywordAlias)
+             .Match(Span.EqualTo("syscall"), HeaderTokens.SysCall)
+             .Match(Span.EqualTo("sysquery"), HeaderTokens.SysQuery)
+             .Match(Span.EqualTo("query"), HeaderTokens.Query)
+             .Match(Span.EqualTo("call"), HeaderTokens.Call)
+             .Match(Span.EqualTo("event"), HeaderTokens.Event)
+             .Match(Span.EqualTo("in"), HeaderTokens.DirectionIn)
+             .Match(Span.EqualTo("out"), HeaderTokens.DirectionOut)
+             .Match(Character.EqualTo('{'), HeaderTokens.OpenBrace)
+             .Match(Character.EqualTo('}'), HeaderTokens.CloseBrace)
+             .Match(Character.EqualTo('('), HeaderTokens.OpenParenthesis)
+             .Match(Character.EqualTo(')'), HeaderTokens.CloseParenthesis)
+             .Match(Character.EqualTo('['), HeaderTokens.OpenBracket)
+             .Match(Character.EqualTo(']'), HeaderTokens.CloseBracket)
+             .Match(Character.EqualTo(','), HeaderTokens.Comma)
+             .Match(Span.Regex(@"[0-9]+"), HeaderTokens.IntegerLiteral)
+             .Match(Span.Regex(@"[a-zA-Z_][a-zA-Z0-9_]*"), HeaderTokens.Identifier)
+             .Match(Character.AnyChar, HeaderTokens.Bad)
+             .Build();
+}
 
-    public ASTDeclarations GetDeclarations()
-    {
-        return CurrentSemanticValue as ASTDeclarations;
-    }
-    
-    private ASTDeclarations MakeDeclarationList() => new ASTDeclarations();
+/// <summary>
+/// Monadic functional combinators mapping story header text layers straight down into a typed AST graph layout safely.
+/// </summary>
+public static class HeaderCombinatorParser
+{
+    private static readonly TokenListParser<HeaderTokens, ParamDirection> DirectionParser =
+        Token.EqualTo(HeaderTokens.DirectionIn).Value(ParamDirection.In)
+        .Or(Token.EqualTo(HeaderTokens.DirectionOut).Value(ParamDirection.Out))
+        .Or(Token.Sequence(HeaderTokens.None).Value(ParamDirection.In).OptionalOrDefault(ParamDirection.In));
 
-    private ASTDeclarations MakeDeclarationList(ASTNode declarations, ASTNode declaration)
-    {
-        var decls = declarations as ASTDeclarations;
-        if (declaration is ASTOption)
+    private static readonly TokenListParser<HeaderTokens, ASTOption> OptionParser =
+        from kw in Token.EqualTo(HeaderTokens.Option)
+        from id in Token.EqualTo(HeaderTokens.Identifier)
+        select new ASTOption
         {
-            decls.Options.Add((declaration as ASTOption).Name);
-        }
-        else if (declaration is ASTAlias)
-        {
-            decls.Aliases.Add(declaration as ASTAlias);
-        }
-        else if (declaration is ASTFunction)
-        {
-            decls.Functions.Add(declaration as ASTFunction);
-        }
-        else
-        {
-            throw new InvalidOperationException("Tried to add unknown node to ASTDeclaration");
-        }
-        return decls;
-    }
-
-    private ASTFunction MakeFunction(ASTNode type, ASTNode name, ASTNode args, ASTNode metadata)
-    {
-        var meta = metadata as ASTFunctionMetadata;
-        return new ASTFunction()
-        {
-            Type = (type as ASTFunctionTypeNode).Type,
-            Name = (name as ASTLiteral).Literal,
-            Params = (args as ASTFunctionParamList).Params,
-            Meta1 = meta.Meta1,
-            Meta2 = meta.Meta2,
-            Meta3 = meta.Meta3,
-            Meta4 = meta.Meta4
+            Name = id.ToStringValue() ?? string.Empty
         };
-    }
 
-    private ASTFunctionTypeNode MakeFunctionType(Compiler.FunctionType type) => new ASTFunctionTypeNode()
-    {
-        Type = type
-    };
+    private static readonly TokenListParser<HeaderTokens, ASTAlias> AliasParser =
+        from kw in Token.EqualTo(HeaderTokens.KeywordAlias)
+        from ob in Token.EqualTo(HeaderTokens.OpenBrace)
+        from name in Token.EqualTo(HeaderTokens.Identifier)
+        from c1 in Token.EqualTo(HeaderTokens.Comma)
+        from typeId in Token.EqualTo(HeaderTokens.IntegerLiteral)
+        from c2 in Token.EqualTo(HeaderTokens.Comma)
+        from aliasId in Token.EqualTo(HeaderTokens.IntegerLiteral)
+        from cb in Token.EqualTo(HeaderTokens.CloseBrace)
+        select new ASTAlias
+        {
+            TypeName = name.ToStringValue() ?? string.Empty,
+            TypeId = uint.Parse(typeId.ToStringValue() ?? "0", CultureInfo.InvariantCulture),
+            AliasId = uint.Parse(aliasId.ToStringValue() ?? "0", CultureInfo.InvariantCulture)
+        };
 
-    private ASTFunctionMetadata MakeFunctionMetadata(ASTNode meta1, ASTNode meta2, ASTNode meta3, ASTNode meta4) => new ASTFunctionMetadata()
-    {
-        Meta1 = uint.Parse((meta1 as ASTLiteral).Literal),
-        Meta2 = uint.Parse((meta2 as ASTLiteral).Literal),
-        Meta3 = uint.Parse((meta3 as ASTLiteral).Literal),
-        Meta4 = uint.Parse((meta4 as ASTLiteral).Literal)
-    };
-    
-    private ASTFunctionParamList MakeFunctionParamList() => new ASTFunctionParamList();
+    private static readonly TokenListParser<HeaderTokens, ASTFunctionParam> InFunctionParamParser =
+        from op in Token.EqualTo(HeaderTokens.OpenParenthesis)
+        from typeNode in Token.EqualTo(HeaderTokens.Identifier)
+        from cp in Token.EqualTo(HeaderTokens.CloseParenthesis)
+        from nameNode in Token.EqualTo(HeaderTokens.Identifier)
+        select new ASTFunctionParam
+        {
+            Name = nameNode.ToStringValue() ?? string.Empty,
+            Type = typeNode.ToStringValue() ?? string.Empty,
+            Direction = ParamDirection.In
+        };
 
-    private ASTFunctionParamList MakeFunctionParamList(ASTNode param)
-    {
-        var list = new ASTFunctionParamList();
-        list.Params.Add(param as ASTFunctionParam);
-        return list;
-    }
+    private static readonly TokenListParser<HeaderTokens, ASTFunctionParam> InOutFunctionParamParser =
+        (from ob in Token.EqualTo(HeaderTokens.OpenBracket)
+         from inKw in Token.EqualTo(HeaderTokens.DirectionIn)
+         from cb in Token.EqualTo(HeaderTokens.CloseBracket)
+         from op in Token.EqualTo(HeaderTokens.OpenParenthesis)
+         from typeNode in Token.EqualTo(HeaderTokens.Identifier)
+         from cp in Token.EqualTo(HeaderTokens.CloseParenthesis)
+         from nameNode in Token.EqualTo(HeaderTokens.Identifier)
+         select new ASTFunctionParam
+         {
+             Name = nameNode.ToStringValue() ?? string.Empty,
+             Type = typeNode.ToStringValue() ?? string.Empty,
+             Direction = ParamDirection.In
+         })
+        .Or(from ob in Token.EqualTo(HeaderTokens.OpenBracket)
+            from outKw in Token.EqualTo(HeaderTokens.DirectionOut)
+            from cb in Token.EqualTo(HeaderTokens.CloseBracket)
+            from op in Token.EqualTo(HeaderTokens.OpenParenthesis)
+            from typeNode in Token.EqualTo(HeaderTokens.Identifier)
+            from cp in Token.EqualTo(HeaderTokens.CloseParenthesis)
+            from nameNode in Token.EqualTo(HeaderTokens.Identifier)
+            select new ASTFunctionParam
+            {
+                Name = nameNode.ToStringValue() ?? string.Empty,
+                Type = typeNode.ToStringValue() ?? string.Empty,
+                Direction = ParamDirection.Out
+            });
 
-    private ASTFunctionParamList MakeFunctionParamList(ASTNode list, ASTNode param)
-    {
-        var paramList = list as ASTFunctionParamList;
-        paramList.Params.Add(param as ASTFunctionParam);
-        return paramList;
-    }
+    private static readonly TokenListParser<HeaderTokens, List<ASTFunctionParam>> InFunctionParamsParser =
+        InFunctionParamParser.ManyDelimitedBy(Token.EqualTo(HeaderTokens.Comma))
+            .Select(arr => arr.ToList())
+            .OptionalOrDefault([]);
 
-    private ASTFunctionParam MakeParam(ASTNode type, ASTNode name) => new ASTFunctionParam()
-    {
-        Name = (name as ASTLiteral).Literal,
-        Type = (type as ASTLiteral).Literal,
-        Direction = ParamDirection.In
-    };
+    private static readonly TokenListParser<HeaderTokens, List<ASTFunctionParam>> InOutFunctionParamsParser =
+        InOutFunctionParamParser.ManyDelimitedBy(Token.EqualTo(HeaderTokens.Comma))
+            .Select(arr => arr.ToList())
+            .OptionalOrDefault([]);
 
-    private ASTFunctionParam MakeParam(ParamDirection direction, ASTNode type, ASTNode name) => new ASTFunctionParam()
-    {
-        Name = (name as ASTLiteral).Literal,
-        Type = (type as ASTLiteral).Literal,
-        Direction = direction
-    };
+    private static readonly TokenListParser<HeaderTokens, (uint m1, uint m2, uint m3, uint m4)> MetadataParser =
+        from op in Token.EqualTo(HeaderTokens.OpenParenthesis)
+        from v1 in Token.EqualTo(HeaderTokens.IntegerLiteral)
+        from c1 in Token.EqualTo(HeaderTokens.Comma)
+        from v2 in Token.EqualTo(HeaderTokens.IntegerLiteral)
+        from c2 in Token.EqualTo(HeaderTokens.Comma)
+        from v3 in Token.EqualTo(HeaderTokens.IntegerLiteral)
+        from c3 in Token.EqualTo(HeaderTokens.Comma)
+        from v4 in Token.EqualTo(HeaderTokens.IntegerLiteral)
+        from cp in Token.EqualTo(HeaderTokens.CloseParenthesis)
+        select (
+            uint.Parse(v1.ToStringValue() ?? "0", CultureInfo.InvariantCulture),
+            uint.Parse(v2.ToStringValue() ?? "0", CultureInfo.InvariantCulture),
+            uint.Parse(v3.ToStringValue() ?? "0", CultureInfo.InvariantCulture),
+            uint.Parse(v4.ToStringValue() ?? "0", CultureInfo.InvariantCulture)
+        );
 
-    private ASTAlias MakeAlias(ASTNode typeName, ASTNode typeId, ASTNode aliasId) => new ASTAlias()
-    {
-        TypeName = (typeName as ASTLiteral).Literal,
-        TypeId = uint.Parse((typeId as ASTLiteral).Literal),
-        AliasId = uint.Parse((aliasId as ASTLiteral).Literal)
-    };
+    private static readonly TokenListParser<HeaderTokens, FunctionType> InOutFunctionTypeParser =
+        Token.EqualTo(HeaderTokens.SysQuery).Value(FunctionType.SysQuery)
+        .Or(Token.EqualTo(HeaderTokens.Query).Value(FunctionType.UserQuery));
 
-    private ASTOption MakeOption(ASTNode option) => new ASTOption()
-    {
-        Name = (option as ASTLiteral).Literal
-    };
+    private static readonly TokenListParser<HeaderTokens, FunctionType> InFunctionTypeParser =
+        Token.EqualTo(HeaderTokens.SysCall).Value(FunctionType.SysCall)
+        .Or(Token.EqualTo(HeaderTokens.Call).Value(FunctionType.Call))
+        .Or(Token.EqualTo(HeaderTokens.Event).Value(FunctionType.Event));
+
+    private static readonly TokenListParser<HeaderTokens, ASTFunction> InOutFunctionParser =
+        from type in InOutFunctionTypeParser
+        from id in Token.EqualTo(HeaderTokens.Identifier)
+        from open in Token.EqualTo(HeaderTokens.OpenParenthesis)
+        from parameters in InOutFunctionParamsParser
+        from close in Token.EqualTo(HeaderTokens.CloseParenthesis)
+        from meta in MetadataParser
+        select new ASTFunction
+        {
+            Type = (Compiler.FunctionType)type,
+            Name = id.ToStringValue() ?? string.Empty,
+            Params = parameters,
+            Meta1 = meta.m1,
+            Meta2 = meta.m2,
+            Meta3 = meta.m3,
+            Meta4 = meta.m4
+        };
+
+    private static readonly TokenListParser<HeaderTokens, ASTFunction> InFunctionParser =
+        from type in InFunctionTypeParser
+        from id in Token.EqualTo(HeaderTokens.Identifier)
+        from open in Token.EqualTo(HeaderTokens.OpenParenthesis)
+        from parameters in InFunctionParamsParser
+        from close in Token.EqualTo(HeaderTokens.CloseParenthesis)
+        from meta in MetadataParser
+        select new ASTFunction
+        {
+            Type = (Compiler.FunctionType)type,
+            Name = id.ToStringValue() ?? string.Empty,
+            Params = parameters,
+            Meta1 = meta.m1,
+            Meta2 = meta.m2,
+            Meta3 = meta.m3,
+            Meta4 = meta.m4
+        };
+
+    private static readonly TokenListParser<HeaderTokens, ASTFunction> FunctionParser =
+        InOutFunctionParser.Or(InFunctionParser);
+
+    public static readonly TokenListParser<HeaderTokens, ASTDeclarations> HeaderFileParser =
+        from options in OptionParser.Many()
+        from aliases in AliasParser.Many()
+        from functions in FunctionParser.Many()
+        select new ASTDeclarations
+        {
+            Options = [.. options.Select(o => o.Name ?? string.Empty)],
+            Aliases = aliases.ToList() ?? [],
+            Functions = functions.ToList() ?? []
+        };
 }

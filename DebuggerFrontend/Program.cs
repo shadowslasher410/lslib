@@ -1,34 +1,62 @@
-﻿using CommandLineParser.Exceptions;
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
+﻿using System.CommandLine;
 using System.Text;
-using System.Threading.Tasks;
+using LSTools.DebuggerFrontend;
 
-namespace LSTools.DebuggerFrontend;
+var defaultLogPath = Path.Combine(AppContext.BaseDirectory, "DAP.log");
 
-class Program
+var logFileOption = new Option<FileInfo>("--log-file", "-l")
 {
-    static void Main(string[] args)
+    Description = "The destination path where Debug Adapter Protocol session logs are written.",
+    Required = false
+};
+
+var rootCommand = new RootCommand("LSTools Debugger Frontend - Debug Adapter Protocol Host")
+{
+    logFileOption
+};
+
+rootCommand.SetAction(async (parseResult, cancellationToken) =>
+{
+    var logFileInfo = parseResult.GetValue(logFileOption) ?? new FileInfo(defaultLogPath);
+
+    try
     {
-        var currentPath = AppDomain.CurrentDomain.BaseDirectory;
-        var logFile = new FileStream(Path.Join(currentPath, "DAP.log"), FileMode.Create);
+        logFileInfo.Directory?.Create();
+        using var logFile = logFileInfo.Open(FileMode.Create, FileAccess.Write, FileShare.Read);
+
         var dap = new DAPStream();
         dap.EnableLogging(logFile);
-        var dapHandler = new DAPMessageHandler(dap);
+
+        var dapHandler = new DAPMessageHandler(dap)
+        {
+            ModUuid = string.Empty
+        };
         dapHandler.EnableLogging(logFile);
+
+        await Task.Run(dap.RunLoop, cancellationToken);
+        return 0;
+    }
+    catch (Exception e)
+    {
+        var exceptionString = e.ToString();
+
         try
         {
-            dap.RunLoop();
-        }
-        catch (Exception e)
-        {
-            using (var writer = new StreamWriter(logFile, Encoding.UTF8, 0x1000, true))
+            if (logFileInfo is { Exists: true })
             {
-                writer.Write(e.ToString());
-                Console.WriteLine(e.ToString());
+                using var errorStream = logFileInfo.Open(FileMode.Append, FileAccess.Write, FileShare.Read);
+                using var writer = new StreamWriter(errorStream, Encoding.UTF8);
+                await writer.WriteAsync(exceptionString.AsMemory(), cancellationToken);
             }
         }
+        catch
+        {
+            // Suppress
+        }
+
+        await Console.Error.WriteLineAsync(exceptionString.AsMemory(), cancellationToken);
+        return 1;
     }
-}
+});
+
+return await rootCommand.Parse(args).InvokeAsync();

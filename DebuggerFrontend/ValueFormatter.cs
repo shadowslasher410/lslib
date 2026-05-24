@@ -1,236 +1,134 @@
 ﻿using LSLib.LS.Story;
 using LSLib.LS.Story.Compiler;
-using System;
-using System.Collections.Generic;
-using System.Linq;
+using System.Text;
 
 namespace LSTools.DebuggerFrontend;
 
-public class ValueFormatter
+public class ValueFormatter(StoryDebugInfo debugInfo)
 {
-    private StoryDebugInfo DebugInfo;
-
-    public ValueFormatter(StoryDebugInfo debugInfo)
-    {
-        DebugInfo = debugInfo;
-    }
-
     public string TupleToString(MsgFrame frame)
     {
-        string tuple = "";
-        var node = DebugInfo.Nodes[frame.NodeId];
-        RuleDebugInfo rule = null;
-        if (node.RuleId != 0)
-        {
-            rule = DebugInfo.Rules[node.RuleId];
-        }
+        var node = debugInfo.Nodes[frame.NodeId];
+        var rule = node.RuleId != 0 ? debugInfo.Rules[node.RuleId] : null;
+
+        var sb = new StringBuilder();
 
         for (var i = 0; i < frame.Tuple.Column.Count; i++)
         {
             var value = frame.Tuple.Column[i];
-            string columnName = TupleVariableIndexToName(rule, node, i);
+            var columnName = TupleVariableIndexToName(rule, node, i);
+            var valueStr = ValueToString(value);
 
-            string valueStr;
-            switch ((Value.Type)value.TypeId)
+            if (columnName is { Length: > 0 })
             {
-                case Value.Type.None:
-                    valueStr = "(None)";
-                    break;
-
-                case Value.Type.Integer:
-                case Value.Type.Integer64:
-                    valueStr = value.Intval.ToString();
-                    break;
-
-                case Value.Type.Float:
-                    valueStr = value.Floatval.ToString();
-                    break;
-
-                case Value.Type.String:
-                case Value.Type.GuidString:
-                default:
-                    valueStr = value.Stringval;
-                    break;
-            }
-
-            if (columnName.Length > 0)
-            {
-                tuple += String.Format("{0}={1}, ", columnName, valueStr);
+                sb.Append($"{columnName}={valueStr}, ");
             }
             else
             {
-                tuple += String.Format("{0}, ", valueStr);
+                sb.Append($"{valueStr}, ");
             }
         }
 
-        return tuple;
+        return sb.ToString();
     }
 
-    public string TupleToString(MsgTuple tuple)
-    {
-        return String.Join(", ", tuple.Column.Select(val => ValueToString(val)));
-    }
+    public static string TupleToString(MsgTuple tuple) =>
+        string.Join(", ", tuple.Column.Select(ValueToString));
 
-    public string ValueToString(MsgTypedValue value)
+    public static string ValueToString(MsgTypedValue value) => (Value.Type)value.TypeId switch
     {
-        string valueStr;
-        switch ((Value.Type)value.TypeId)
+        Value.Type.None => "(None)",
+        Value.Type.Integer or
+        Value.Type.Integer64 => value.Intval.ToString(),
+        Value.Type.Float => value.Floatval.ToString(),
+        _ => value.Stringval ?? string.Empty
+    };
+
+    public static string TupleVariableIndexToName(RuleDebugInfo? rule, NodeDebugInfo? node, int index)
+    {
+        if (rule is null)
         {
-            case Value.Type.None:
-                valueStr = "(None)";
-                break;
-
-            case Value.Type.Integer:
-            case Value.Type.Integer64:
-                valueStr = value.Intval.ToString();
-                break;
-
-            case Value.Type.Float:
-                valueStr = value.Floatval.ToString();
-                break;
-
-            case Value.Type.String:
-            case Value.Type.GuidString:
-            default:
-                valueStr = value.Stringval;
-                break;
+            return $"#{index}";
         }
 
-        return valueStr;
-    }
-
-    public String TupleVariableIndexToName(RuleDebugInfo rule, NodeDebugInfo node, int index)
-    {
-        if (rule == null)
-        {
-            return "#" + index.ToString();
-        }
-        else if (node != null)
+        if (node is not null)
         {
             if (index < node.ColumnToVariableMaps.Count)
             {
                 var mappedColumnIdx = node.ColumnToVariableMaps[index];
-                if (mappedColumnIdx < rule.Variables.Count)
-                {
-                    return rule.Variables[mappedColumnIdx].Name;
-                }
-                else
-                {
-                    return String.Format("(Bad Variable Idx #{0})", index);
-                }
+                return mappedColumnIdx < rule.Variables.Count
+                    ? rule.Variables[mappedColumnIdx].Name
+                    : $"(Bad Variable Idx #{index})";
             }
-            else
-            {
-                return String.Format("(Unknown #{0})", index);
-            }
+
+            return $"(Unknown #{index})";
         }
-        else
-        {
-            if (index < rule.Variables.Count)
-            {
-                return rule.Variables[index].Name;
-            }
-            else
-            {
-                return String.Format("(Bad Variable Idx #{0})", index);
-            }
-        }
+
+        return index < rule.Variables.Count
+            ? rule.Variables[index].Name
+            : $"(Bad Variable Idx #{index})";
     }
 
     public string GetFrameDebugName(MsgFrame frame)
     {
-        string frameType;
-        switch (frame.Type)
+        string frameType = frame.Type switch
         {
-            case MsgFrame.Types.FrameType.IsValid: frameType = "IsValid"; break;
-            case MsgFrame.Types.FrameType.Pushdown: frameType = "Pushdown"; break;
-            case MsgFrame.Types.FrameType.PushdownDelete: frameType = "PushdownDelete"; break;
-            case MsgFrame.Types.FrameType.Insert: frameType = "Insert"; break;
-            case MsgFrame.Types.FrameType.Delete: frameType = "Delete"; break;
-            case MsgFrame.Types.FrameType.RuleAction: frameType = "RuleAction"; break;
-            case MsgFrame.Types.FrameType.GoalInitAction: frameType = "GoalInitAction"; break;
-            case MsgFrame.Types.FrameType.GoalExitAction: frameType = "GoalExitAction"; break;
-
-            default:
-                throw new InvalidOperationException($"Unsupported frame type: {frame.Type}");
-        }
+            FrameType.IsValid => nameof(FrameType.IsValid),
+            FrameType.Pushdown => nameof(FrameType.Pushdown),
+            FrameType.PushdownDelete => nameof(FrameType.PushdownDelete),
+            FrameType.Insert => nameof(FrameType.Insert),
+            FrameType.Delete => nameof(FrameType.Delete),
+            FrameType.RuleAction => nameof(FrameType.RuleAction),
+            FrameType.GoalInitAction => nameof(FrameType.GoalInitAction),
+            FrameType.GoalExitAction => nameof(FrameType.GoalExitAction),
+            _ => throw new InvalidOperationException($"Unsupported frame type: {frame.Type}")
+        };
 
         if (frame.NodeId != 0)
         {
+            var node = debugInfo.Nodes[frame.NodeId];
             string dbName = "";
-            var node = DebugInfo.Nodes[frame.NodeId];
+
             if (node.DatabaseId != 0)
             {
-                var db = DebugInfo.Databases[node.DatabaseId];
-                dbName = db.Name;
+                dbName = debugInfo.Databases[node.DatabaseId].Name;
             }
-            else if (node.Name != null && node.Name.Length > 0)
+            else if (node is { Name.Length: > 0 })
             {
                 dbName = node.Name;
             }
 
-            if (dbName != "")
-            {
-                return $"{frameType} @ {node.Type} (DB {dbName})";
-            }
-            else
-            {
-                return $"{frameType} @ {node.Type}";
-            }
+            return dbName is { Length: > 0 }
+                ? $"{frameType} @ {node.Type} (DB {dbName})"
+                : $"{frameType} @ {node.Type}";
         }
-        else
-        {
-            var goal = DebugInfo.Goals[frame.GoalId];
-            return $"{frameType} @ {goal.Name}";
-        }
+
+        var goal = debugInfo.Goals[frame.GoalId];
+        return $"{frameType} @ {goal.Name}";
     }
 
-    public string GetFrameName(MsgFrame frame, MsgTuple arguments)
+    public string GetFrameName(MsgFrame frame, MsgTuple? arguments) => frame.Type switch
     {
-        switch (frame.Type)
+        FrameType.GoalInitAction => $"{debugInfo.Goals[frame.GoalId].Name} (INIT)",
+        FrameType.GoalExitAction => $"{debugInfo.Goals[frame.GoalId].Name} (EXIT)",
+        FrameType.Insert or
+        FrameType.Delete => GetInsertOrDeleteFrameName(frame, arguments),
+        _ => throw new InvalidOperationException($"Unsupported root frame type: {frame.Type}")
+    };
+
+    private string GetInsertOrDeleteFrameName(MsgFrame frame, MsgTuple? arguments)
+    {
+        string argumentsFmt = arguments is not null ? $"({TupleToString(arguments)})" : "";
+        var node = debugInfo.Nodes[frame.NodeId];
+
+        if (node.Type == Node.Type.Database)
         {
-            case MsgFrame.Types.FrameType.GoalInitAction:
-                {
-                    var goal = DebugInfo.Goals[frame.GoalId].Name;
-                    return goal + " (INIT)";
-                }
+            var db = debugInfo.Databases[node.DatabaseId];
 
-            case MsgFrame.Types.FrameType.GoalExitAction:
-                {
-                    var goal = DebugInfo.Goals[frame.GoalId].Name;
-                    return goal + " (EXIT)";
-                }
-
-            case MsgFrame.Types.FrameType.Insert:
-            case MsgFrame.Types.FrameType.Delete:
-                {
-                    string argumentsFmt = "";
-                    if (arguments != null)
-                    {
-                        argumentsFmt = "(" + TupleToString(arguments) + ")";
-                    }
-
-                    var node = DebugInfo.Nodes[frame.NodeId];
-                    if (node.Type == Node.Type.Database)
-                    {
-                        var db = DebugInfo.Databases[node.DatabaseId];
-                        if (frame.Type == MsgFrame.Types.FrameType.Insert)
-                        {
-                            return db.Name + argumentsFmt + " (INSERT)";
-                        }
-                        else
-                        {
-                            return db.Name + argumentsFmt + " (DELETE)";
-                        }
-                    }
-                    else
-                    {
-                        return node.Name + argumentsFmt;
-                    }
-                }
-
-            default:
-                throw new InvalidOperationException($"Unsupported root frame type: {frame.Type}");
+            string actionTag = frame.Type == FrameType.Insert ? "INSERT" : "DELETE";
+            return $"{db.Name}{argumentsFmt} ({actionTag})";
         }
+
+        return $"{node.Name}{argumentsFmt}";
     }
 }

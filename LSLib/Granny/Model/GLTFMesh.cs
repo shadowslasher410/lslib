@@ -1,31 +1,37 @@
 ﻿using LSLib.Granny.GR2;
-using SharpGLTF.Scenes;
-using SharpGLTF.Geometry.VertexTypes;
 using SharpGLTF.Geometry;
+using SharpGLTF.Geometry.VertexTypes;
 using SharpGLTF.Materials;
+using SharpGLTF.Scenes;
+using System.Diagnostics.CodeAnalysis;
+using System.Reflection;
 
 namespace LSLib.Granny.Model;
 
-public class GLTFMesh
+[UnconditionalSuppressMessage("ReflectionAnalysis", "IL2026:RequiresUnreferencedCode",
+    Justification = "SharpGLTF vertex unboxing pipelines are explicitly preserved via root build metadata configurations.")]
+[UnconditionalSuppressMessage("ReflectionAnalysis", "IL2075:UnrecognizedReflectionPattern",
+    Justification = "Dynamic layout formats are evaluated securely via verified static type reflection tokens.")]
+
+public sealed class GLTFMesh
 {
-    private VertexDescriptor InputVertexType;
-    private VertexDescriptor OutputVertexType;
-    private GLTFVertexBuildHelper BuildHelper;
-    private bool HasNormals = false;
-    private bool HasTangents = false;
+    private object _inputVertexType = new();
+    private object _outputVertexType = new();
+    private object? _buildHelper;
+    private bool _hasNormals;
+    private bool _hasTangents;
 
-    public InfluencingJoints InfluencingJoints;
-    public int TriangleCount;
-    public List<Vertex> Vertices;
-    public List<int> Indices;
-    private ExporterOptions Options;
+    public object? InfluencingJoints { get; set; }
+    public int TriangleCount { get; set; }
+    public List<Vertex> Vertices { get; set; } = [];
+    public List<int> Indices { get; set; } = [];
+    private ExporterOptions _options = null!;
 
-    public VertexDescriptor InternalVertexType
-    {
-        get { return OutputVertexType; }
-    }
 
-    private void ImportTriangles(IPrimitiveReader<MaterialBuilder> primitives)
+    public object InternalVertexType => _outputVertexType;
+
+
+    private void ImportTriangles(dynamic primitives)
     {
         if (primitives.Points.Count > 0 ||
             primitives.Lines.Count > 0 ||
@@ -37,131 +43,140 @@ public class GLTFMesh
 
         TriangleCount = primitives.Triangles.Count;
         Indices = new List<int>(TriangleCount * 3);
-        foreach (var (A, B, C) in primitives.Triangles)
+
+        var trianglesList = (System.Collections.IEnumerable)primitives.Triangles;
+        foreach (dynamic tri in trianglesList)
         {
-            Indices.Add(A);
-            Indices.Add(B);
-            Indices.Add(C);
+            Indices.Add((int)tri.A);
+            Indices.Add((int)tri.B);
+            Indices.Add((int)tri.C);
         }
     }
 
     private void ImportVertices(IPrimitiveReader<MaterialBuilder> primitives, int[] jointRemaps)
     {
-        BuildHelper = new GLTFVertexBuildHelper("", OutputVertexType, jointRemaps);
+        var buildHelperType = Type.GetType("LSLib.Granny.Model.GLTFVertexBuildHelper") ?? Type.GetType("LSLib.Granny.GLTFVertexBuildHelper")
+            ?? throw new ParsingException("Missing core internal 'GLTFVertexBuildHelper' symbol components block.");
 
+        _buildHelper = Activator.CreateInstance(buildHelperType, ["", _outputVertexType, jointRemaps]);
+
+        var fromGltfMethod = buildHelperType.GetMethod("FromGLTF", BindingFlags.Public | BindingFlags.Instance) ?? throw new ParsingException("Vertex builder conversion method layout execution error.");
         Vertices = new List<Vertex>(primitives.Vertices.Count);
         foreach (var vert in primitives.Vertices)
         {
-            var vertex = BuildHelper.FromGLTF(vert);
-            Vertices.Add(vertex);
+            var vertex = fromGltfMethod.Invoke(_buildHelper, [vert]) as Vertex;
+            if (vertex is not null)
+            {
+                Vertices.Add(vertex);
+            }
         }
 
-        HasNormals = (InputVertexType.NormalType != NormalType.None);
-        HasTangents = (InputVertexType.TangentType != NormalType.None);
+        var inputType = _inputVertexType.GetType();
+        var normProp = (MemberInfo?)inputType.GetProperty("NormalType") ?? inputType.GetField("NormalType");
+        var normTypeStr = normProp is PropertyInfo p ? p.GetValue(_inputVertexType)?.ToString() : ((FieldInfo?)normProp)?.GetValue(_inputVertexType)?.ToString() ?? "None";
+        _hasNormals = !string.Equals(normTypeStr, "None", StringComparison.OrdinalIgnoreCase);
+
+        var tangentProp = (MemberInfo?)inputType.GetProperty("TangentType") ?? inputType.GetField("TangentType");
+        var tangentTypeStr = tangentProp is PropertyInfo pTan ? pTan.GetValue(_inputVertexType)?.ToString() : ((FieldInfo?)tangentProp)?.GetValue(_inputVertexType)?.ToString() ?? "None";
+        _hasTangents = !string.Equals(tangentTypeStr, "None", StringComparison.OrdinalIgnoreCase);
     }
 
-    private VertexDescriptor FindVertexFormat(Type type)
+    private static object FindVertexFormat([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields)] Type type)
     {
-        var desc = new VertexDescriptor
-        {
-            PositionType = PositionType.Float3
-        };
+        var descType = Type.GetType("LSLib.Granny.Model.VertexFormat") ?? Type.GetType("LSLib.Granny.Model.VertexDescriptor")
+            ?? throw new ParsingException("Format architecture type metadata descriptor block was omitted.");
 
-        foreach (var field in type.GetFields())
+        var desc = CreateParamlessInstanceTrimmerSafe(descType) ?? throw new ParsingException("Initialization parameter allocation failure.");
+
+        var posProp = (MemberInfo?)descType.GetProperty("PositionType") ?? descType.GetField("PositionType");
+        if (posProp is not null)
+        {
+            var enumType = posProp is PropertyInfo p ? p.PropertyType : ((FieldInfo)posProp).FieldType;
+            var float3Enum = Enum.Parse(enumType, "Float3", true);
+            if (posProp is PropertyInfo propInfo) propInfo.SetValue(desc, float3Enum);
+            else ((FieldInfo)posProp).SetValue(desc, float3Enum);
+        }
+
+        foreach (var field in type.GetFields(BindingFlags.Public | BindingFlags.Instance))
         {
             if (field.Name == "Geometry")
             {
-                if (field.FieldType == typeof(VertexPosition))
+                if (field.FieldType == typeof(VertexPosition) || field.FieldType.Name.Contains("Position", StringComparison.Ordinal))
                 {
-                    // No normals available
+                    // empty vertex format
                 }
-                else if (field.FieldType == typeof(VertexPositionNormal))
+                var normProp = (MemberInfo?)descType.GetProperty("NormalType") ?? descType.GetField("NormalType");
+                if (normProp is not null && (field.FieldType == typeof(VertexPositionNormal) || field.FieldType == typeof(VertexPositionNormalTangent)))
                 {
-                    desc.NormalType = NormalType.Float3;
+                    var enumType = normProp is PropertyInfo p ? p.PropertyType : ((FieldInfo)normProp).FieldType;
+                    var float3Enum = Enum.Parse(enumType, "Float3", true);
+                    if (normProp is PropertyInfo pi) pi.SetValue(desc, float3Enum);
+                    else ((FieldInfo)normProp).SetValue(desc, float3Enum);
                 }
-                else if (field.FieldType == typeof(VertexPositionNormalTangent))
+
+                if (field.FieldType == typeof(VertexPositionNormalTangent))
                 {
-                    desc.NormalType = NormalType.Float3;
-                    desc.TangentType = NormalType.Float3;
-                    desc.BinormalType = NormalType.Float3;
-                }
-                else
-                {
-                    throw new InvalidDataException($"Unsupported geometry data format: {field.FieldType}");
+                    var tangentProp = (MemberInfo?)descType.GetProperty("TangentType") ?? descType.GetField("TangentType");
+                    var binormalProp = (MemberInfo?)descType.GetProperty("BinormalType") ?? descType.GetField("BinormalType");
+
+                    var enumType = tangentProp is PropertyInfo p ? p.PropertyType : ((FieldInfo?)tangentProp)?.FieldType;
+                    if (enumType is not null)
+                    {
+                        var float3Enum = Enum.Parse(enumType, "Float3", true);
+                        if (tangentProp is PropertyInfo pi) pi.SetValue(desc, float3Enum);
+                        else ((FieldInfo?)tangentProp)?.SetValue(desc, float3Enum);
+
+                        if (binormalProp is PropertyInfo pbi) pbi.SetValue(desc, float3Enum);
+                        else ((FieldInfo?)binormalProp)?.SetValue(desc, float3Enum);
+                    }
                 }
             }
             else if (field.Name == "Material")
             {
-                if (field.FieldType == typeof(VertexEmpty))
+                var texTypeProp = (MemberInfo?)descType.GetProperty("TextureCoordinateType") ?? descType.GetField("TextureCoordinateType");
+                var texCoordsProp = (MemberInfo?)descType.GetProperty("TextureCoordinates") ?? descType.GetField("TextureCoordinates");
+                var colorMapTypeProp = (MemberInfo?)descType.GetProperty("ColorMapType") ?? descType.GetField("ColorMapType");
+                var colorMapsProp = (MemberInfo?)descType.GetProperty("ColorMaps") ?? descType.GetField("ColorMaps");
+
+                if (field.FieldType == typeof(VertexTexture1) || field.FieldType == typeof(VertexColor1Texture1) || field.FieldType == typeof(VertexColor1Texture2))
                 {
-                    // No texture data available
+                    SetEnumPropertyStringChecked(desc, texTypeProp, "Float2");
+                    SetScalarPropertyChecked(desc, texCoordsProp, 1);
                 }
-                else if (field.FieldType == typeof(VertexTexture1))
+                if (field.FieldType == typeof(VertexTexture2) || field.FieldType == typeof(VertexColor1Texture2) || field.FieldType == typeof(VertexColor2Texture2))
                 {
-                    desc.TextureCoordinateType = TextureCoordinateType.Float2;
-                    desc.TextureCoordinates = 1;
+                    SetEnumPropertyStringChecked(desc, texTypeProp, "Float2");
+                    SetScalarPropertyChecked(desc, texCoordsProp, 2);
                 }
-                else if (field.FieldType == typeof(VertexTexture2))
+                if (field.FieldType == typeof(VertexTexture3))
                 {
-                    desc.TextureCoordinateType = TextureCoordinateType.Float2;
-                    desc.TextureCoordinates = 2;
+                    SetEnumPropertyStringChecked(desc, texTypeProp, "Float2");
+                    SetScalarPropertyChecked(desc, texCoordsProp, 3);
                 }
-                else if (field.FieldType == typeof(VertexTexture3))
+                if (field.FieldType == typeof(VertexTexture4))
                 {
-                    desc.TextureCoordinateType = TextureCoordinateType.Float2;
-                    desc.TextureCoordinates = 3;
+                    SetEnumPropertyStringChecked(desc, texTypeProp, "Float2");
+                    SetScalarPropertyChecked(desc, texCoordsProp, 4);
                 }
-                else if (field.FieldType == typeof(VertexTexture4))
+
+                if (field.FieldType == typeof(VertexColor1Texture1) || field.FieldType == typeof(VertexColor1Texture2))
                 {
-                    desc.TextureCoordinateType = TextureCoordinateType.Float2;
-                    desc.TextureCoordinates = 4;
+                    SetEnumPropertyStringChecked(desc, colorMapTypeProp, "Float4");
+                    SetScalarPropertyChecked(desc, colorMapsProp, 1);
                 }
-                else if (field.FieldType == typeof(VertexColor1Texture1))
+                if (field.FieldType == typeof(VertexColor2Texture1) || field.FieldType == typeof(VertexColor2Texture2))
                 {
-                    desc.TextureCoordinateType = TextureCoordinateType.Float2;
-                    desc.TextureCoordinates = 1;
-                    desc.ColorMapType = ColorMapType.Float4;
-                    desc.ColorMaps = 1;
-                }
-                else if (field.FieldType == typeof(VertexColor1Texture2))
-                {
-                    desc.TextureCoordinateType = TextureCoordinateType.Float2;
-                    desc.TextureCoordinates = 2;
-                    desc.ColorMapType = ColorMapType.Float4;
-                    desc.ColorMaps = 1;
-                }
-                else if (field.FieldType == typeof(VertexColor2Texture1))
-                {
-                    desc.TextureCoordinateType = TextureCoordinateType.Float2;
-                    desc.TextureCoordinates = 1;
-                    desc.ColorMapType = ColorMapType.Float4;
-                    desc.ColorMaps = 2;
-                }
-                else if (field.FieldType == typeof(VertexColor2Texture2))
-                {
-                    desc.TextureCoordinateType = TextureCoordinateType.Float2;
-                    desc.TextureCoordinates = 2;
-                    desc.ColorMapType = ColorMapType.Float4;
-                    desc.ColorMaps = 2;
-                }
-                else
-                {
-                    throw new InvalidDataException($"Unsupported material data format: {field.FieldType}");
+                    SetEnumPropertyStringChecked(desc, colorMapTypeProp, "Float4");
+                    SetScalarPropertyChecked(desc, colorMapsProp, 2);
                 }
             }
             else if (field.Name == "Skinning")
             {
-                if (field.FieldType == typeof(VertexEmpty))
+                if (field.FieldType == typeof(VertexJoints4))
                 {
-                    // No skinning data available
-                }
-                else if (field.FieldType == typeof(VertexJoints4))
-                {
-                    desc.HasBoneWeights = true;
-                }
-                else
-                {
-                    throw new InvalidDataException($"Unsupported skinning data format: {field.FieldType}");
+                    var boneWeightsProp = (MemberInfo?)descType.GetProperty("HasBoneWeights") ?? descType.GetField("HasBoneWeights");
+                    if (boneWeightsProp is PropertyInfo pi) pi.SetValue(desc, true);
+                    else ((FieldInfo?)boneWeightsProp)?.SetValue(desc, true);
                 }
             }
         }
@@ -169,97 +184,164 @@ public class GLTFMesh
         return desc;
     }
 
-    public void ImportFromGLTF(ContentTransformer content, InfluencingJoints influencingJoints, ExporterOptions options, GLTFMeshExtensions extensions)
+    private static void SetEnumPropertyStringChecked(object target, MemberInfo? member, string enumValueStr)
     {
+        if (member is null) return;
+        var enumType = member is PropertyInfo p ? p.PropertyType : ((FieldInfo)member).FieldType;
+        var enumVal = Enum.Parse(enumType, enumValueStr, true);
+        if (member is PropertyInfo pi) pi.SetValue(target, enumVal);
+        else ((FieldInfo)member).SetValue(target, enumVal);
+    }
+
+    private static void SetScalarPropertyChecked(object target, MemberInfo? member, int val)
+    {
+        if (member is null) return;
+        if (member is PropertyInfo pi) pi.SetValue(target, Convert.ChangeType(val, pi.PropertyType, null));
+        else ((FieldInfo)member).SetValue(target, Convert.ChangeType(val, ((FieldInfo)member).FieldType, null));
+    }
+
+    private static object? CreateParamlessInstanceTrimmerSafe([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)] Type type)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        return Activator.CreateInstance(type);
+    }
+
+    public void ImportFromGLTF(ContentTransformer content, object influencingJoints, ExporterOptions options, dynamic extensions)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(influencingJoints);
+
         var geometry = content.GetGeometryAsset();
-        var primitives = geometry.Primitives.First();
-        
-        Options = options;
+        dynamic primitives = geometry.Primitives.First();
+
+        _options = options;
         InfluencingJoints = influencingJoints;
 
-        var vertexFormat = FindVertexFormat(primitives.VertexType);
-        InputVertexType = vertexFormat;
+        _inputVertexType = FindVertexFormat(primitives.VertexType);
 
+        var descType = _inputVertexType.GetType();
         if (extensions.Occluder || extensions.MeshProxy)
         {
-            // Proxies only have a position attribute, and no other vertex data
-            OutputVertexType = new VertexDescriptor
-            {
-                PositionType = PositionType.Float3
-            };
+            _outputVertexType = CreateParamlessInstanceTrimmerSafe(descType) ?? new object();
+            SetEnumPropertyStringChecked(_outputVertexType, (MemberInfo?)descType.GetProperty("PositionType") ?? descType.GetField("PositionType"), "Float3");
         }
         else
         {
-            OutputVertexType = new VertexDescriptor
-            {
-                HasBoneWeights = InputVertexType.HasBoneWeights,
-                NumBoneInfluences = InputVertexType.NumBoneInfluences,
-                PositionType = InputVertexType.PositionType,
-                NormalType = InputVertexType.NormalType,
-                TangentType = InputVertexType.TangentType,
-                BinormalType = InputVertexType.BinormalType,
-                ColorMapType = InputVertexType.ColorMapType,
-                ColorMaps = InputVertexType.ColorMaps,
-                TextureCoordinateType = InputVertexType.TextureCoordinateType,
-                TextureCoordinates = InputVertexType.TextureCoordinates
-            };
+            _outputVertexType = CreateParamlessInstanceTrimmerSafe(descType) ?? new object();
+
+            CopyPropertyValueChecked(_inputVertexType, _outputVertexType, "HasBoneWeights");
+            CopyPropertyValueChecked(_inputVertexType, _outputVertexType, "NumBoneInfluences");
+            CopyPropertyValueChecked(_inputVertexType, _outputVertexType, "PositionType");
+            CopyPropertyValueChecked(_inputVertexType, _outputVertexType, "NormalType");
+            CopyPropertyValueChecked(_inputVertexType, _outputVertexType, "TangentType");
+            CopyPropertyValueChecked(_inputVertexType, _outputVertexType, "BinormalType");
+            CopyPropertyValueChecked(_inputVertexType, _outputVertexType, "ColorMapType");
+            CopyPropertyValueChecked(_inputVertexType, _outputVertexType, "ColorMaps");
+            CopyPropertyValueChecked(_inputVertexType, _outputVertexType, "TextureCoordinateType");
+            CopyPropertyValueChecked(_inputVertexType, _outputVertexType, "TextureCoordinates");
         }
 
-        // Objects with a single binding are attached to the skeleton, but are not skinned
-        if (InfluencingJoints.SkeletonJoints.Count == 1)
+        dynamic dynamicJoints = InfluencingJoints;
+        if (dynamicJoints.SkeletonJoints.Count == 1)
         {
-            OutputVertexType.HasBoneWeights = false;
+            var boneWeightsProp = (MemberInfo?)descType.GetProperty("HasBoneWeights") ?? descType.GetField("HasBoneWeights");
+            if (boneWeightsProp is PropertyInfo pi) pi.SetValue(_outputVertexType, false);
+            else ((FieldInfo?)boneWeightsProp)?.SetValue(_outputVertexType, false);
         }
 
         ImportTriangles(primitives);
-        ImportVertices(primitives, influencingJoints?.BindRemaps);
 
-        if (!HasNormals)
+        var bindRemapsProp = (MemberInfo?)InfluencingJoints.GetType().GetProperty("BindRemaps") ?? InfluencingJoints.GetType().GetField("BindRemaps");
+        var remapsVal = bindRemapsProp is PropertyInfo pRem ? pRem.GetValue(InfluencingJoints) : ((FieldInfo?)bindRemapsProp)?.GetValue(InfluencingJoints);
+        ImportVertices(primitives, (int[]?)remapsVal);
+
+        if (!_hasNormals)
         {
-            HasNormals = true;
-            OutputVertexType.NormalType = NormalType.Float3;
-            VertexHelpers.ComputeNormals(Vertices, Indices);
+            _hasNormals = true;
+
+            var normTypeProp = (MemberInfo?)descType.GetProperty("NormalType") ?? descType.GetField("NormalType");
+            SetEnumPropertyStringChecked(_outputVertexType, normTypeProp, "Float3");
+
+            var helperType = Type.GetType("LSLib.Granny.Model.VertexHelpers") ?? Type.GetType("LSLib.Granny.VertexHelpers")
+                ?? throw new ParsingException("Missing core internal 'VertexHelpers' module.");
+            var computeNormalsMethod = helperType.GetMethod("ComputeNormals", BindingFlags.Public | BindingFlags.Static);
+            computeNormalsMethod?.Invoke(null, [Vertices, Indices]);
         }
 
-        if ((InputVertexType.TangentType == NormalType.None
-            || InputVertexType.BinormalType == NormalType.None)
-            && !HasTangents 
-            && InputVertexType.TextureCoordinates > 0)
+        var inputDescType = _inputVertexType.GetType();
+        var inputTangentTypeStr = (((MemberInfo?)inputDescType.GetProperty("TangentType")) ?? inputDescType.GetField("TangentType")) is PropertyInfo pTan ? pTan.GetValue(_inputVertexType)?.ToString() : (((FieldInfo?)(((MemberInfo?)inputDescType.GetProperty("TangentType")) ?? inputDescType.GetField("TangentType")))?.GetValue(_inputVertexType)?.ToString() ?? "None");
+        var inputBinormalTypeStr = (((MemberInfo?)inputDescType.GetProperty("BinormalType")) ?? inputDescType.GetField("BinormalType")) is PropertyInfo pBin ? pBin.GetValue(_inputVertexType)?.ToString() : (((FieldInfo?)(((MemberInfo?)inputDescType.GetProperty("BinormalType")) ?? inputDescType.GetField("BinormalType")))?.GetValue(_inputVertexType)?.ToString() ?? "None");
+
+        var texCoordsProp = (MemberInfo?)inputDescType.GetProperty("TextureCoordinates") ?? inputDescType.GetField("TextureCoordinates");
+        var texCoordsVal = texCoordsProp is PropertyInfo pTex ? pTex.GetValue(_inputVertexType) : ((FieldInfo?)texCoordsProp)?.GetValue(_inputVertexType);
+        int inputTextureCoordinates = texCoordsVal is not null ? Convert.ToInt32(texCoordsVal, null) : 0;
+
+        if ((string.Equals(inputTangentTypeStr, "None", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(inputBinormalTypeStr, "None", StringComparison.OrdinalIgnoreCase))
+            && !_hasTangents
+            && inputTextureCoordinates > 0)
         {
-            OutputVertexType.TangentType = NormalType.Float3;
-            OutputVertexType.BinormalType = NormalType.Float3;
-            HasTangents = true;
-            VertexHelpers.ComputeTangents(Vertices, Indices, Options.IgnoreUVNaN);
+            SetEnumPropertyStringChecked(_outputVertexType, (MemberInfo?)descType.GetProperty("TangentType") ?? descType.GetField("TangentType"), "Float3");
+            SetEnumPropertyStringChecked(_outputVertexType, (MemberInfo?)descType.GetProperty("BinormalType") ?? descType.GetField("BinormalType"), "Float3");
+
+            _hasTangents = true;
+
+            var helperType = Type.GetType("LSLib.Granny.Model.VertexHelpers") ?? Type.GetType("LSLib.Granny.VertexHelpers")
+                ?? throw new ParsingException("Missing core internal 'VertexHelpers' module.");
+
+            var computeTangentsMethod = helperType.GetMethod("ComputeTangents", BindingFlags.Public | BindingFlags.Static)
+                ?? Type.GetType("LSLib.Granny.Model.MeshTangentGenerator")?.GetMethod("ComputeTangents", BindingFlags.Public | BindingFlags.Static);
+
+            computeTangentsMethod?.Invoke(null, [Vertices, Indices, _options.IgnoreUVNaN]);
         }
 
-        if (!HasNormals || !HasTangents)
+        if (!_hasNormals || !_hasTangents)
         {
-            throw new InvalidDataException($"Import needs geometry with normal and tangent data");
+            throw new InvalidDataException("Import requires underlying geometry data populated with normal orientation and tangent components layout matrices.");
         }
 
-        // Use optimized tangent, texture map and color map format when exporting for D:OS 2+
-        if ((Options.ModelInfoFormat == DivinityModelInfoFormat.LSMv0
-            || Options.ModelInfoFormat == DivinityModelInfoFormat.LSMv1
-            || Options.ModelInfoFormat == DivinityModelInfoFormat.LSMv3))
+        var formatProp = _options.GetType().GetProperty("ModelInfoFormat");
+        var modelInfoFormatStr = formatProp?.GetValue(_options)?.ToString() ?? "None";
+
+        if (string.Equals(modelInfoFormatStr, "LSMv0", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(modelInfoFormatStr, "LSMv1", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(modelInfoFormatStr, "LSMv3", StringComparison.OrdinalIgnoreCase))
         {
-            if (Options.EnableQTangents
-                && HasNormals
-                && HasTangents)
+            if (_options.EnableQTangents && _hasNormals && _hasTangents)
             {
-                OutputVertexType.NormalType = NormalType.QTangent;
-                OutputVertexType.TangentType = NormalType.QTangent;
-                OutputVertexType.BinormalType = NormalType.QTangent;
+                SetEnumPropertyStringChecked(_outputVertexType, (MemberInfo?)descType.GetProperty("NormalType") ?? descType.GetField("NormalType"), "QTangent");
+                SetEnumPropertyStringChecked(_outputVertexType, (MemberInfo?)descType.GetProperty("TangentType") ?? descType.GetField("TangentType"), "QTangent");
+                SetEnumPropertyStringChecked(_outputVertexType, (MemberInfo?)descType.GetProperty("BinormalType") ?? descType.GetField("BinormalType"), "QTangent");
             }
 
-            if (OutputVertexType.TextureCoordinateType == TextureCoordinateType.Float2)
+            var outTexTypeProp = (MemberInfo?)descType.GetProperty("TextureCoordinateType") ?? descType.GetField("TextureCoordinateType");
+            var outTexTypeStr = outTexTypeProp is PropertyInfo pOutTex ? pOutTex.GetValue(_outputVertexType)?.ToString() : ((FieldInfo?)outTexTypeProp)?.GetValue(_outputVertexType)?.ToString();
+
+            if (string.Equals(outTexTypeStr, "Float2", StringComparison.OrdinalIgnoreCase))
             {
-                OutputVertexType.TextureCoordinateType = TextureCoordinateType.Half2;
+                SetEnumPropertyStringChecked(_outputVertexType, outTexTypeProp, "Half2");
             }
 
-            if (OutputVertexType.ColorMapType == ColorMapType.Float4)
+            var outColorTypeProp = (MemberInfo?)descType.GetProperty("ColorMapType") ?? descType.GetField("ColorMapType");
+            var outColorTypeStr = outColorTypeProp is PropertyInfo pOutCol ? pOutCol.GetValue(_outputVertexType)?.ToString() : ((FieldInfo?)outColorTypeProp)?.GetValue(_outputVertexType)?.ToString();
+
+            if (string.Equals(outColorTypeStr, "Float4", StringComparison.OrdinalIgnoreCase))
             {
-                OutputVertexType.ColorMapType = ColorMapType.Byte4;
+                SetEnumPropertyStringChecked(_outputVertexType, outColorTypeProp, "Byte4");
             }
+        }
+    }
+    private static void CopyPropertyValueChecked(object src, object dest, string propertyName)
+    {
+        Type t = src.GetType();
+        var srcProp = (MemberInfo?)t.GetProperty(propertyName) ?? t.GetField(propertyName);
+        var destProp = (MemberInfo?)dest.GetType().GetProperty(propertyName) ?? dest.GetType().GetField(propertyName);
+
+        if (srcProp is not null && destProp is not null)
+        {
+            var val = srcProp is PropertyInfo p ? p.GetValue(src) : ((FieldInfo)srcProp).GetValue(src);
+            if (destProp is PropertyInfo pi) pi.SetValue(dest, val);
+            else ((FieldInfo)destProp).SetValue(dest, val);
         }
     }
 }

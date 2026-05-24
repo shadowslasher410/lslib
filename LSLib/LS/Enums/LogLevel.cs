@@ -1,5 +1,4 @@
-﻿// ReSharper disable InconsistentNaming
-namespace LSLib.LS.Enums;
+﻿namespace LSLib.LS.Enums;
 
 public enum LogLevel
 {

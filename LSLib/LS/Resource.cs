@@ -1,52 +1,50 @@
 ﻿namespace LSLib.LS;
 
-public class InvalidFormatException(string message) : Exception(message)
-{
-}
+public sealed class InvalidFormatException(string message) : Exception(message);
 
 public struct PackedVersion
 {
-    public UInt32 Major;
-    public UInt32 Minor;
-    public UInt32 Revision;
-    public UInt32 Build;
+    public uint Major;
+    public uint Minor;
+    public uint Revision;
+    public uint Build;
 
-    public static PackedVersion FromInt64(Int64 packed)
+    public static PackedVersion FromInt64(long packed)
     {
         return new PackedVersion
         {
-            Major = (UInt32)((packed >> 55) & 0x7f),
-            Minor = (UInt32)((packed >> 47) & 0xff),
-            Revision = (UInt32)((packed >> 31) & 0xffff),
-            Build = (UInt32)(packed & 0x7fffffff),
+            Major = (uint)((packed >> 55) & 0x7f),
+            Minor = (uint)((packed >> 47) & 0xff),
+            Revision = (uint)((packed >> 31) & 0xffff),
+            Build = (uint)(packed & 0x7fffffff),
         };
     }
 
-    public static PackedVersion FromInt32(Int32 packed)
+    public static PackedVersion FromInt32(int packed)
     {
         return new PackedVersion
         {
-            Major = (UInt32)((packed >> 28) & 0x0f),
-            Minor = (UInt32)((packed >> 24) & 0x0f),
-            Revision = (UInt32)((packed >> 16) & 0xff),
-            Build = (UInt32)(packed & 0xffff),
+            Major = (uint)((packed >> 28) & 0x0f),
+            Minor = (uint)((packed >> 24) & 0x0f),
+            Revision = (uint)((packed >> 16) & 0xff),
+            Build = (uint)(packed & 0xffff),
         };
     }
 
-    public readonly Int32 ToVersion32()
+    public readonly int ToVersion32()
     {
-        return (Int32)((Major & 0x0f) << 28 |
+        return (int)((Major & 0x0f) << 28 |
             (Minor & 0x0f) << 24 |
             (Revision & 0xff) << 16 |
             (Build & 0xffff) << 0);
     }
 
-    public readonly Int64 ToVersion64()
+    public readonly long ToVersion64()
     {
-        return (Int64)(((Int64)Major & 0x7f) << 55 |
-            ((Int64)Minor & 0xff) << 47 |
-            ((Int64)Revision & 0xffff) << 31 |
-            ((Int64)Build & 0x7fffffff) << 0);
+        return (long)(((long)Major & 0x7f) << 55 |
+            ((long)Minor & 0xff) << 47 |
+            ((long)Revision & 0xffff) << 31 |
+            ((long)Build & 0x7fffffff) << 0);
     }
 }
 
@@ -55,36 +53,36 @@ public struct LSMetadata
 {
     public const uint CurrentMajorVersion = 33;
 
-    public UInt64 Timestamp;
-    public UInt32 MajorVersion;
-    public UInt32 MinorVersion;
-    public UInt32 Revision;
-    public UInt32 BuildNumber;
+    public ulong Timestamp;
+    public uint MajorVersion;
+    public uint MinorVersion;
+    public uint Revision;
+    public uint BuildNumber;
 }
 
 [StructLayout(LayoutKind.Sequential)]
 public struct LSBHeader
 {
     /// <summary>
-    /// LSB file signature since BG3
+    /// LSB file signature since BG3 (Exposed as a zero-allocation read-only span)
     /// </summary>
-    public readonly static byte[] SignatureBG3 = "LSFM"u8.ToArray();
+    public static ReadOnlySpan<byte> SignatureBG3 => "LSFM"u8;
 
     /// <summary>
     /// LSB signature up to FW3 (DOS2 DE)
     /// </summary>
     public const uint SignatureFW3 = 0x40000000;
 
-    public UInt32 Signature;
-    public UInt32 TotalSize;
-    public UInt32 BigEndian;
-    public UInt32 Unknown;
+    public uint Signature;
+    public uint TotalSize;
+    public uint BigEndian;
+    public uint Unknown;
     public LSMetadata Metadata;
 }
 
 public static class AttributeTypeMaps
 {
-    public readonly static Dictionary<string, AttributeType> TypeToId = new()
+    public static readonly Dictionary<string, AttributeType> TypeToId = new(StringComparer.Ordinal)
     {
         { "None", AttributeType.None },
         { "uint8", AttributeType.Byte },
@@ -122,7 +120,7 @@ public static class AttributeTypeMaps
         { "TranslatedFSString", AttributeType.TranslatedFSString },
     };
 
-    public readonly static Dictionary<AttributeType, string> IdToType = new()
+    public static readonly Dictionary<AttributeType, string> IdToType = new()
     {
         { AttributeType.None, "None" },
         { AttributeType.Byte, "uint8" },
@@ -164,8 +162,8 @@ public static class AttributeTypeMaps
 public class Resource
 {
     public LSMetadata Metadata;
-    public LSFMetadataFormat? MetadataFormat = null;
-    public Dictionary<string, Region> Regions = [];
+    public LSFMetadataFormat? MetadataFormat { get; set; }
+    public Dictionary<string, Region> Regions { get; set; } = new(StringComparer.Ordinal);
 
     public Resource()
     {
@@ -175,45 +173,52 @@ public class Resource
 
 public class Region : Node
 {
-    public string RegionName;
+    public string RegionName { get; set; } = string.Empty;
 }
 
 public class Node
 {
-    public string Name;
-    public Node Parent;
-    public Dictionary<string, NodeAttribute> Attributes = [];
-    public Dictionary<string, List<Node>> Children = [];
-    public int? Line = null;
-    public string KeyAttribute = null;
+    public string Name { get; set; } = string.Empty;
+    public Node? Parent { get; set; }
+    public Dictionary<string, NodeAttribute> Attributes { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, List<Node>> Children { get; set; } = new(StringComparer.Ordinal);
+    public int? Line { get; set; }
+    public string? KeyAttribute { get; set; }
 
+    /// <summary>
+    /// Total direct single-level nested child nodes.
+    /// </summary>
     public int ChildCount
     {
         get
         {
-            return
-                (from c in Children
-                select c.Value.Count).Sum();
+            int count = 0;
+            foreach (KeyValuePair<string, List<Node>> pair in Children)
+            {
+                count += pair.Value.Count;
+            }
+            return count;
         }
     }
 
     public int TotalChildCount()
     {
         int count = 0;
-        foreach (var key in Children)
+        foreach (KeyValuePair<string, List<Node>> pair in Children)
         {
-            foreach (var child in key.Value)
+            foreach (Node child in pair.Value)
             {
                 count += 1 + child.TotalChildCount();
             }
         }
-
         return count;
     }
 
     public void AppendChild(Node child)
     {
-        if (!Children.TryGetValue(child.Name, out List<Node> children))
+        ArgumentNullException.ThrowIfNull(child);
+
+        if (!Children.TryGetValue(child.Name, out List<Node>? children))
         {
             children = [];
             Children.Add(child.Name, children);
