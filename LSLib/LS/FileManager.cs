@@ -1,35 +1,26 @@
 namespace LSLib.LS;
 
-public class FileManager
+public static class FileManager
 {
     public static void TryToCreateDirectory(string path)
     {
-        string outputPath = path;
+        ArgumentException.ThrowIfNullOrEmpty(path);
 
-        if (string.IsNullOrWhiteSpace(outputPath))
+        // Throw exception if path is relative
+        if (!Path.IsPathFullyQualified(path))
         {
-            throw new ArgumentNullException(nameof(path), "Cannot create directory without path");
+            throw new ArgumentException("Cannot create directory without absolute path context configuration.", nameof(path));
         }
 
-        // throw exception if path is relative
-        if (!Path.IsPathFullyQualified(outputPath))
-        {
-            throw new ArgumentException("Cannot create directory without absolute path", nameof(path));
-        }
+        // Validate and clean path references
+        string fullPath = Path.GetFullPath(path);
 
-        // validate path
-        outputPath = Path.GetFullPath(path);
-        outputPath = Path.GetDirectoryName(outputPath);
+        string? directoryPath = Path.GetDirectoryName(fullPath) ?? throw new DirectoryNotFoundException($"Cannot extract or resolve a valid directory boundary segment from target file path: '{fullPath}'");
 
-        if (outputPath == null)
+        // If the directory does not exist, create the directory natively
+        if (!Directory.Exists(directoryPath))
         {
-            throw new NullReferenceException("Cannot create directory without non-null output path");
-        }
-        
-        // if the directory does not exist, create the directory
-        if (!Directory.Exists(outputPath))
-        {
-            Directory.CreateDirectory(outputPath);
+            Directory.CreateDirectory(directoryPath);
         }
     }
 }

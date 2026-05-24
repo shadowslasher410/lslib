@@ -1,0 +1,60 @@
+<rxui:ReactiveUserControl xmlns="https://github.com/avaloniaui"
+						 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         xmlns:views="using:LSTools.DivineGUI"
+                         xmlns:rxui="clr-namespace:Avalonia.ReactiveUI;assembly=Avalonia.ReactiveUI"
+                         x:Class="LSTools.DivineGUI.LocalizationPane"
+                         x:DataType="views:LocalizationPane">
+
+	<Grid RowDefinitions="Auto,*,Auto" Margin="16" RowSpacing="12">
+
+		<HeaderedContentControl Grid.Row="0" Header="Convert localization files" Theme="{StaticResource GroupBoxTheme}">
+			<Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                  ColumnDefinitions="*,Auto"
+                  Margin="12"
+                  RowSpacing="6"
+                  ColumnSpacing="8">
+
+				<TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Text="Input file path:" />
+				<TextBox Grid.Row="1" Grid.Column="0" Text="{Binding LocaInputPath}" PlaceholderText="Select input localization dictionary binary or markup file (.loca, .xml)..." VerticalAlignment="Center" />
+				<Button Grid.Row="1" Grid.Column="1" Content="..." Width="50" Command="{Binding BrowseInputLocationCommand}" />
+
+				<TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Text="Output file path:" />
+				<TextBox Grid.Row="3" Grid.Column="0" Text="{Binding LocaOutputPath}" PlaceholderText="Set destination path for the target converted localization file..." VerticalAlignment="Center" />
+				<Button Grid.Row="3" Grid.Column="1" Content="..." Width="50" Command="{Binding BrowseOutputLocationCommand}" />
+
+				<Button Grid.Row="4" Grid.Column="0" Content="Convert" Width="200" Command="{Binding ConvertLocalizationCommand}" Theme="{StaticResource AccentButtonTheme}" Margin="0,6,0,0">
+					<Interaction.Behaviors>
+						<EventTriggerBehavior EventName="Click">
+							<InvokeCommandAction Command="{Binding ConvertLocalizationCommand}" />
+						</EventTriggerBehavior>
+					</Interaction.Behaviors>
+				</Button>
+			</Grid>
+		</HeaderedContentControl>
+
+		<DataGrid Grid.Row="1"
+                  ItemsSource="{Binding LocalizationEntries}"
+                  AutoGenerateColumns="False"
+                  IsReadOnly="True"
+                  GridLinesVisibility="All"
+                  BorderThickness="1"
+                  BorderBrush="{DynamicResource SystemControlTransientBorderBrush}"
+                  Margin="0,4">
+			<DataGrid.Columns>
+				<DataGridTextColumn Header="Key / Handle" Binding="{Binding Key}" Width="250" />
+				<DataGridTextColumn Header="Version" Binding="{Binding Version}" Width="80" />
+				<DataGridTextColumn Header="Translated Text Content" Binding="{Binding Value}" Width="*" />
+			</DataGrid.Columns>
+		</DataGrid>
+
+		<Grid Grid.Row="2" RowDefinitions="Auto,Auto" RowSpacing="4"
+              IsVisible="{Binding ProgressText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+			<Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+				<TextBlock Grid.Column="0" Text="{Binding ProgressText}" FontWeight="SemiBold" />
+				<TextBlock Grid.Column="1" Text="Processing Task..." Classes="HintText" />
+			</Grid>
+			<ProgressBar Grid.Row="1" IsIndeterminate="True" Height="4" />
+		</Grid>
+
+	</Grid>
+</rxui:ReactiveUserControl>

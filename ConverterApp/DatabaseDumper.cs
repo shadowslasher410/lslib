@@ -1,80 +1,122 @@
-﻿using LSLib.LS.Story;
-using System;
-using System.IO;
-using System.Linq;
-using System.Text;
+﻿using System.Text;
+using LSLib.LS.Story;
 
-namespace ConverterApp;
+namespace LSTools.DivineGUI;
 
-class DatabaseDumper : IDisposable
+public sealed class DatabaseDumper : IDisposable
 {
-    private StreamWriter Writer;
+    public bool DumpUnnamedDbs { get; set; } = false;
 
-    public bool DumpUnnamedDbs { get; set; }
+    private readonly StreamWriter _writer;
 
     public DatabaseDumper(Stream outputStream)
     {
-        Writer = new StreamWriter(outputStream, Encoding.UTF8);
-        DumpUnnamedDbs = false;
+        ArgumentNullException.ThrowIfNull(outputStream);
+        _writer = new StreamWriter(outputStream, Encoding.UTF8);
     }
 
-    public void Dispose()
-    {
-        Writer.Dispose();
-    }
-    
+    public void Dispose() => _writer.Dispose();
+
     private void DumpFact(Story story, Fact fact)
     {
-        Writer.Write("(");
-        for (var i = 0; i < fact.Columns.Count; i++)
+        _writer.Write("(");
+
+        int columnCount = fact.Columns.Count;
+        for (int i = 0; i < columnCount; i++)
         {
-            fact.Columns[i].DebugDump(Writer, story);
-            if (i + 1 < fact.Columns.Count)
+            fact.Columns[i].DebugDump(_writer, story);
+            if (i + 1 < columnCount)
             {
-                Writer.Write(", ");
+                _writer.Write(", ");
             }
         }
-        Writer.WriteLine(")");
+
+        _writer.Write(")\n");
     }
 
     public void DumpDatabase(Story story, Database database)
     {
-        if (database.OwnerNode != null)
+        if (database.OwnerNode is { } node)
         {
-            if (database.OwnerNode.Name.Length > 0)
+            if (!string.IsNullOrEmpty(node.Name))
             {
-                Writer.Write($"Database '{database.OwnerNode.Name}'");
+                _writer.Write($"Database '{node.Name}'");
             }
             else
             {
-                Writer.Write($"Database #{database.Index} <{database.OwnerNode.TypeName()}>");
+                _writer.Write($"Database #{database.Index} <{node.TypeName()}>");
             }
         }
         else
         {
-            Writer.Write($"Database #{database.Index}");
+            _writer.Write($"Database #{database.Index}");
         }
 
-        var types = String.Join(", ", database.Parameters.Types.Select(ty => story.Types[ty].Name));
-        Writer.WriteLine($" ({types}):");
-
-        foreach (var fact in database.Facts)
+        var typeNamesList = new List<string>(database.Parameters.Types.Count);
+        foreach (int typeId in database.Parameters.Types.Select(v => (int)v))
         {
-            Writer.Write("\t");
-            DumpFact(story, fact);
+            if (story.Types.TryGetValue((uint)typeId, out var storyType))
+            {
+                typeNamesList.Add(storyType.Name);
+            }
+        }
+        string typesString = string.Join(", ", typeNamesList);
+        _writer.Write($" ({typesString}):\n");
+
+        if (database.Facts is IEnumerable<Fact> stronglyTypedFacts)
+        {
+            foreach (Fact fact in stronglyTypedFacts)
+            {
+                _writer.Write("\t");
+                DumpFact(story, fact);
+            }
         }
     }
 
     public void DumpAll(Story story)
     {
-        Writer.WriteLine(" === DUMP OF DATABASES === ");
-        foreach (var db in story.Databases)
+        ArgumentNullException.ThrowIfNull(story);
+        _writer.Write(" === DUMP OF DATABASES === \n");
+
+        foreach (KeyValuePair<uint, Database> entry in story.Databases)
         {
-            if (DumpUnnamedDbs || (db.Value.OwnerNode != null && db.Value.OwnerNode.Name.Length > 0))
+            Database db = entry.Value;
+            if (DumpUnnamedDbs || (db.OwnerNode is { } node && !string.IsNullOrEmpty(node.Name)))
             {
-                DumpDatabase(story, db.Value);
-                Writer.WriteLine("");
+                DumpDatabase(story, db);
+                _writer.Write("\n");
             }
         }
+    }
+
+    public List<FactRowModel> GenerateGridRows(Story story)
+    {
+        ArgumentNullException.ThrowIfNull(story);
+        var rowsCollection = new List<FactRowModel>();
+
+        foreach (KeyValuePair<uint, Database> entry in story.Databases)
+        {
+            Database db = entry.Value;
+
+            if (DumpUnnamedDbs || (db.OwnerNode is { } node && !string.IsNullOrEmpty(node.Name)))
+            {
+                if (db.Facts is IEnumerable<Fact> stronglyTypedFacts)
+                {
+                    foreach (Fact fact in stronglyTypedFacts)
+                    {
+                        var evaluatedDisplayValues = new string[fact.Columns.Count];
+                        for (int i = 0; i < fact.Columns.Count; i++)
+                        {
+                            using var stringWriter = new StringWriter();
+                            fact.Columns[i].DebugDump(stringWriter, story);
+                            evaluatedDisplayValues[i] = stringWriter.ToString();
+                        }
+                        rowsCollection.Add(new FactRowModel(fact, evaluatedDisplayValues));
+                    }
+                }
+            }
+        }
+
+        return rowsCollection;
     }
 }

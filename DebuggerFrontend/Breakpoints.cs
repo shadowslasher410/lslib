@@ -1,91 +1,55 @@
 ﻿using LSLib.LS.Story.Compiler;
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using LSTools.StoryCompiler;
+using System.Runtime.InteropServices;
 
 namespace LSTools.DebuggerFrontend;
 
 public enum LineType
 {
-    // Line is a single node (i.e. AND, rule, etc.)
     NodeLine,
-    // Line is an action in the rule THEN part
     RuleActionLine,
-    // Line is an action in the goal INIT section
     GoalInitActionLine,
-    // Line is an action in the goal EXIT section
     GoalExitActionLine
 }
 
-// Node information associated to a line
 public class LineDebugInfo
 {
-    // Type of line
-    public LineType Type;
-    // Node associated to this line
-    public NodeDebugInfo Node;
-    // Goal associated to this line
-    public GoalDebugInfo Goal;
-    // Index of action in INIT/EXIT/THEN part
-    public UInt32 ActionIndex;
-    // Line number
-    public UInt32 Line;
+    public LineType Type { get; set; }
+    public NodeDebugInfo? Node { get; set; }
+    public required GoalDebugInfo Goal { get; set; }
+    public uint ActionIndex { get; set; }
+    public uint Line { get; set; }
 }
 
 public class GoalLineMap
 {
-    public GoalDebugInfo Goal;
-    // Line number => Node info mappings
-    public Dictionary<UInt32, LineDebugInfo> LineMap;
+    public required GoalDebugInfo Goal { get; set; }
+    public Dictionary<uint, LineDebugInfo> LineMap { get; set; } = [];
 }
 
-public class CodeLocationTranslator
+public class CodeLocationTranslator(StoryDebugInfo debugInfo)
 {
-    private StoryDebugInfo DebugInfo;
-    // Goal name => Goal mappings
-    private Dictionary<String, GoalLineMap> GoalMap;
+    private readonly Dictionary<string, GoalLineMap> _goalMap = [];
 
-    public CodeLocationTranslator(StoryDebugInfo debugInfo)
+    public void Initialize() => BuildLineMap();
+
+    public LineDebugInfo? LocationToNode(string goalName, uint line)
     {
-        DebugInfo = debugInfo;
-        GoalMap = new Dictionary<string, GoalLineMap>();
-        BuildLineMap();
+        return _goalMap.TryGetValue(goalName, out var goalLineMap) &&
+               goalLineMap.LineMap.TryGetValue(line, out var lineInfo)
+               ? lineInfo
+               : null;
     }
 
-    public LineDebugInfo LocationToNode(String goalName, UInt32 line)
+    private void AddLineMapping(LineType type, GoalDebugInfo goal, NodeDebugInfo? node, uint index, uint line)
     {
-        GoalLineMap goalMap;
-        if (!GoalMap.TryGetValue(goalName, out goalMap))
+        ref var goalLineMap = ref CollectionsMarshal.GetValueRefOrAddDefault(_goalMap, goal.Name, out bool exists);
+        if (!exists)
         {
-            return null;
+            goalLineMap = new GoalLineMap { Goal = goal };
         }
 
-        LineDebugInfo lineInfo;
-        if (!goalMap.LineMap.TryGetValue(line, out lineInfo))
-        {
-            return null;
-        }
-
-        return lineInfo;
-    }
-
-    private void AddLineMapping(LineType type, GoalDebugInfo goal, NodeDebugInfo node, UInt32 index, UInt32 line)
-    {
-        GoalLineMap goalMap;
-        if (!GoalMap.TryGetValue(goal.Name, out goalMap))
-        {
-            goalMap = new GoalLineMap
-            {
-                Goal = goal,
-                LineMap = new Dictionary<uint, LineDebugInfo>()
-            };
-            GoalMap.Add(goal.Name, goalMap);
-        }
-
-        var mapping = new LineDebugInfo
+        goalLineMap!.LineMap[line] = new LineDebugInfo
         {
             Type = type,
             Goal = goal,
@@ -93,222 +57,184 @@ public class CodeLocationTranslator
             ActionIndex = index,
             Line = line
         };
-        goalMap.LineMap[line] = mapping;
     }
 
     private void BuildLineMap(GoalDebugInfo goal)
     {
         for (var index = 0; index < goal.InitActions.Count; index++)
         {
-            AddLineMapping(LineType.GoalInitActionLine, goal, null, (UInt32)index, goal.InitActions[index].Line);
+            AddLineMapping(LineType.GoalInitActionLine, goal, null, (uint)index, goal.InitActions[index].Line);
         }
 
         for (var index = 0; index < goal.ExitActions.Count; index++)
         {
-            AddLineMapping(LineType.GoalExitActionLine, goal, null, (UInt32)index, goal.ExitActions[index].Line);
+            AddLineMapping(LineType.GoalExitActionLine, goal, null, (uint)index, goal.ExitActions[index].Line);
         }
     }
 
     private void BuildLineMap(NodeDebugInfo node)
     {
-        if (node.RuleId != 0)
+        if (node.RuleId == 0) return;
+
+        var rule = debugInfo.Rules[node.RuleId];
+        var goal = debugInfo.Goals[rule.GoalId];
+
+        var resolvedWireType = (NodeType)node.Type;
+
+        if (node.Line != 0 && resolvedWireType != NodeType.Rule)
         {
-            var rule = DebugInfo.Rules[node.RuleId];
-            var goal = DebugInfo.Goals[rule.GoalId];
+            AddLineMapping(LineType.NodeLine, goal, node, 0, (uint)node.Line);
+        }
 
-            if (node.Line != 0
-                && node.Type != LSLib.LS.Story.Node.Type.Rule)
+        if (resolvedWireType == NodeType.Rule)
+        {
+            for (var index = 0; index < rule.Actions.Count; index++)
             {
-                AddLineMapping(LineType.NodeLine, goal, node, 0, (UInt32)node.Line);
-            }
-
-            if (node.Type == LSLib.LS.Story.Node.Type.Rule)
-            {
-                for (var index = 0; index < rule.Actions.Count; index++)
-                {
-                    AddLineMapping(LineType.RuleActionLine, goal, node, (UInt32)index, rule.Actions[index].Line);
-                }
+                AddLineMapping(LineType.RuleActionLine, goal, node, (uint)index, rule.Actions[index].Line);
             }
         }
     }
 
     private void BuildLineMap()
     {
-        foreach (var goal in DebugInfo.Goals)
+        foreach (var (_, goal) in debugInfo.Goals)
         {
-            BuildLineMap(goal.Value);
+            BuildLineMap(goal);
         }
 
-        foreach (var node in DebugInfo.Nodes)
+        foreach (var (_, node) in debugInfo.Nodes)
         {
-            BuildLineMap(node.Value);
+            BuildLineMap(node);
         }
     }
 }
 
 public class Breakpoint
 {
-    // Unique breakpoint ID on frontend
-    public UInt32 Id;
-    // Source code location reference
-    public DAPSource Source;
-    // Story goal name
-    public String GoalName;
-    // 1-based line number on goal file
-    public UInt32 Line;
-    // Line to node mapping (if the line could be mapped to a valid location)
-    public LineDebugInfo LineInfo;
-    // Is the node permanently invalidated?
-    // (ie. an unsupported feature was requested when adding the breakpoint, like conditional breaks)
-    public bool PermanentlyInvalid;
-    // Was the breakpoint correct and could it be mapped to a node?
-    // This is updated each time the debug info is reloaded.
-    public bool Verified;
-    // Reason for verification error
-    public String ErrorReason;
+    public uint Id { get; set; }
+    public required DAPSource Source { get; set; }
+    public string GoalName { get; set; } = string.Empty;
+    public uint Line { get; set; }
+    public LineDebugInfo? LineInfo { get; set; }
+    public bool PermanentlyInvalid { get; set; }
+    public bool Verified { get; set; }
+    public string ErrorReason { get; set; } = string.Empty;
 
-    public DAPBreakpoint ToDAP()
+    public DAPBreakpoint ToDAP() => new()
     {
-        return new DAPBreakpoint
-        {
-            id = (int)Id,
-            verified = Verified,
-            message = ErrorReason,
-            source = Source,
-            line = (int)Line
-        };
-    }
+        Id = (int)Id,
+        Verified = Verified,
+        Message = ErrorReason,
+        Source = Source,
+        Line = (int)Line
+    };
 }
 
-public class BreakpointManager
+public class BreakpointManager(DebuggerClient client)
 {
-    private DebuggerClient DbgCli;
-    private CodeLocationTranslator LocationTranslator;
-    private Dictionary<UInt32, Breakpoint> Breakpoints;
-    private UInt32 NextBreakpointId = 1;
+    private CodeLocationTranslator? _locationTranslator;
+    private Dictionary<uint, Breakpoint> _breakpoints = [];
 
-    public BreakpointManager(DebuggerClient client)
-    {
-        DbgCli = client;
-        Breakpoints = new Dictionary<uint, Breakpoint>();
-    }
+    private uint NextBreakpointId { get => field++; set; } = 1;
 
     public List<Breakpoint> DebugInfoLoaded(StoryDebugInfo debugInfo)
     {
-        LocationTranslator = new CodeLocationTranslator(debugInfo);
+        _locationTranslator = new CodeLocationTranslator(debugInfo);
+        _locationTranslator.Initialize();
+
         var changes = RevalidateBreakpoints();
-        // Sync breakpoint list to backend as the current debugger instance doesn't have
-        // any of our breakpoints yet
         UpdateBreakpointsOnBackend();
         return changes;
     }
 
     public List<Breakpoint> DebugInfoUnloaded()
     {
-        LocationTranslator = null;
-        var changes = RevalidateBreakpoints();
-        return changes;
+        _locationTranslator = null;
+        return RevalidateBreakpoints();
     }
 
-    public void ClearGoalBreakpoints(String goalName)
+    public void ClearGoalBreakpoints(string goalName)
     {
-        Breakpoints = Breakpoints
+        _breakpoints = _breakpoints
             .Where(kv => kv.Value.GoalName != goalName)
-            .Select(kv => kv.Value)
-            .ToDictionary(kv => kv.Id);
+            .ToDictionary(static kv => kv.Key, static kv => kv.Value);
     }
 
     public Breakpoint AddBreakpoint(DAPSource source, DAPSourceBreakpoint breakpoint)
     {
         var bp = new Breakpoint
         {
-            Id = NextBreakpointId++,
+            Id = NextBreakpointId,
             Source = source,
-            GoalName = Path.GetFileNameWithoutExtension(source.name),
-            Line = (UInt32)breakpoint.line,
+            GoalName = Path.GetFileNameWithoutExtension(source.Name) ?? string.Empty,
+            Line = (uint)breakpoint.Line,
             PermanentlyInvalid = false
         };
-        Breakpoints.Add(bp.Id, bp);
+        _breakpoints.Add(bp.Id, bp);
 
-        if (breakpoint.condition != null || breakpoint.hitCondition != null)
+        if (breakpoint.Condition is { Length: > 0 } || breakpoint.HitCondition is { Length: > 0 })
         {
             bp.PermanentlyInvalid = true;
             bp.ErrorReason = "Conditional breakpoints are not supported";
         }
 
         ValidateBreakpoint(bp);
-
         return bp;
     }
 
-    /// <summary>
-    /// Transmits the list of active breakpoints to the debugger backend.
-    /// </summary>
     public void UpdateBreakpointsOnBackend()
     {
-        var breakpoints = Breakpoints.Values.Where(bp => bp.Verified).ToList();
-        DbgCli.SendSetBreakpoints(breakpoints);
+        List<Breakpoint> activeBreakpoints = [.. _breakpoints.Values.Where(static bp => bp.Verified)];
+        client.SendSetBreakpoints(activeBreakpoints);
     }
 
-    /// <summary>
-    /// Rechecks the code -> node mapping of each breakpoint.
-    /// This is required after each story reload/recompilation to make sure
-    /// that we don't use stale node ID-s from the previous compilation.
-    /// </summary>
-    List<Breakpoint> RevalidateBreakpoints()
+    public bool ValidateBreakpoint(Breakpoint bp)
     {
-        var changes = new List<Breakpoint>();
-        foreach (var bp in Breakpoints)
-        {
-            bool changed = ValidateBreakpoint(bp.Value);
-            if (changed)
-            {
-                changes.Add(bp.Value);
-            }
-        }
+        bool oldVerified = bp.Verified;
+        string oldReason = bp.ErrorReason;
+        var oldLineInfo = bp.LineInfo;
 
-        return changes;
-    }
-
-    private bool ValidateBreakpoint(Breakpoint bp)
-    {
         if (bp.PermanentlyInvalid)
         {
             bp.Verified = false;
-            // Don't touch the error message here, as it was already updated when the 
-            // PermanentlyInvalid flag was set.
-            return false;
+            return oldVerified != bp.Verified || oldReason != bp.ErrorReason;
         }
 
-        var oldVerified = bp.Verified;
-        var oldReason = bp.ErrorReason;
-
-        bp.LineInfo = LocationToNode(bp.GoalName, bp.Line);
-
-        if (bp.LineInfo == null)
+        if (_locationTranslator is null)
         {
             bp.Verified = false;
-            bp.ErrorReason = $"Could not map {bp.GoalName}:{bp.Line} to a story node";
+            bp.LineInfo = null;
+            bp.ErrorReason = "No debug data loaded / story compilation state is inactive.";
+            return oldVerified != bp.Verified || oldReason != bp.ErrorReason || oldLineInfo != bp.LineInfo;
+        }
+
+        var nodeInfo = _locationTranslator.LocationToNode(bp.GoalName, bp.Line);
+        if (nodeInfo is null)
+        {
+            bp.Verified = false;
+            bp.LineInfo = null;
+            bp.ErrorReason = $"Line {bp.Line} could not be resolved to a valid structural Osiris query or action node block.";
         }
         else
         {
             bp.Verified = true;
-            bp.ErrorReason = null;
+            bp.LineInfo = nodeInfo;
+            bp.ErrorReason = string.Empty;
         }
 
-        var changed = (bp.Verified != oldVerified || bp.ErrorReason != oldReason);
-        return changed;
+        return oldVerified != bp.Verified || oldReason != bp.ErrorReason || oldLineInfo != bp.LineInfo;
     }
 
-    private LineDebugInfo LocationToNode(String goalName, UInt32 line)
+    private List<Breakpoint> RevalidateBreakpoints()
     {
-        if (LocationTranslator == null)
+        List<Breakpoint> changes = [];
+        foreach (var (_, bp) in _breakpoints)
         {
-            return null;
+            if (ValidateBreakpoint(bp))
+            {
+                changes.Add(bp);
+            }
         }
-        else
-        {
-            return LocationTranslator.LocationToNode(goalName, line);
-        }
+        return changes;
     }
 }

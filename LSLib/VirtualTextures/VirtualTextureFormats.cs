@@ -1,70 +1,95 @@
-﻿namespace LSLib.VirtualTextures;
+﻿using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+
+namespace LSLib.VirtualTextures;
+
+[InlineArray(11)]
+public struct Reserved11Buffer
+{
+    private uint _element0;
+}
+
+[InlineArray(16)]
+public struct Compression16Buffer
+{
+    private byte _element0;
+}
+
+[InlineArray(512)]
+public struct FileName512Buffer
+{
+    private byte _element0;
+}
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct DDSHeader
 {
-    public const UInt32 DDSMagic = 0x20534444;
-    public const UInt32 HeaderSize = 0x7c;
-    public const UInt32 FourCC_DXT5 = 0x35545844;
+    public const uint DDSMagic = 0x20534444;
+    public const uint HeaderSize = 0x7c;
+    public const uint FourCC_DXT5 = 0x35545844;
 
-    public UInt32 dwMagic;
-    public UInt32 dwSize;
-    public UInt32 dwFlags;
-    public UInt32 dwHeight;
-    public UInt32 dwWidth;
-    public UInt32 dwPitchOrLinearSize;
-    public UInt32 dwDepth;
-    public UInt32 dwMipMapCount;
-    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 11)]
-    public UInt32[] dwReserved1;
+    public uint dwMagic;
+    public uint dwSize;
+    public uint dwFlags;
+    public uint dwHeight;
+    public uint dwWidth;
+    public uint dwPitchOrLinearSize;
+    public uint dwDepth;
+    public uint dwMipMapCount;
+    public Reserved11Buffer dwReserved1;
 
-    public UInt32 dwPFSize;
-    public UInt32 dwPFFlags;
-    public UInt32 dwFourCC;
-    public UInt32 dwRGBBitCount;
-    public UInt32 dwRBitMask;
-    public UInt32 dwGBitMask;
-    public UInt32 dwBBitMask;
-    public UInt32 dwABitMask;
+    public uint dwPFSize;
+    public uint dwPFFlags;
+    public uint dwFourCC;
+    public uint dwRGBBitCount;
+    public uint dwRBitMask;
+    public uint dwGBitMask;
+    public uint dwBBitMask;
+    public uint dwABitMask;
 
-    public UInt32 dwCaps;
-    public UInt32 dwCaps2;
-    public UInt32 dwCaps3;
-    public UInt32 dwCaps4;
-    public UInt32 dwReserved2;
+    public uint dwCaps;
+    public uint dwCaps2;
+    public uint dwCaps3;
+    public uint dwCaps4;
+    public uint dwReserved2;
 
     public string FourCCName
     {
-        get
+        readonly get
         {
-            return Char.ToString((char)(dwFourCC & 0xff))
-                + Char.ToString((char)((dwFourCC >> 8) & 0xff))
-                + Char.ToString((char)((dwFourCC >> 16) & 0xff))
-                + Char.ToString((char)((dwFourCC >> 24) & 0xff));
+            uint localFourCC = dwFourCC;
+            if (!BitConverter.IsLittleEndian)
+            {
+                localFourCC = BinaryPrimitives.ReverseEndianness(localFourCC);
+            }
+            ReadOnlySpan<byte> bytes = MemoryMarshal.CreateReadOnlySpan(ref Unsafe.As<uint, byte>(ref localFourCC), 4);
+            return Encoding.UTF8.GetString(bytes);
         }
-
         set
         {
-            dwFourCC = (uint)value[0]
-                | ((uint)value[1] << 8)
-                | ((uint)value[2] << 16)
-                | ((uint)value[3] << 24);
+            ArgumentNullException.ThrowIfNull(value);
+            if (value.Length < 4) throw new ArgumentException("FourCC string parameters require 4 characters length.", nameof(value));
+
+            uint localFourCC = 0;
+            Span<byte> bytes = MemoryMarshal.CreateSpan(ref Unsafe.As<uint, byte>(ref localFourCC), 4);
+            Encoding.UTF8.GetBytes(value.AsSpan(0, 4), bytes);
+
+            dwFourCC = BitConverter.IsLittleEndian ? localFourCC : BinaryPrimitives.ReverseEndianness(localFourCC);
         }
     }
-};
-
+}
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct DDSHeaderDX10
 {
-    public UInt32 dxgiFormat;
-    public UInt32 resourceDimension;
-    public UInt32 miscFlag;
-    public UInt32 arraySize;
-    public UInt32 miscFlags2;
-};
+    public uint dxgiFormat;
+    public uint resourceDimension;
+    public uint miscFlag;
+    public uint arraySize;
+    public uint miscFlags2;
+}
 
-public enum GTSDataType : UInt32
+public enum GTSDataType : uint
 {
     R8G8B8_SRGB = 0,
     R8G8B8A8_SRGB = 1,
@@ -93,9 +118,9 @@ public enum GTSDataType : UInt32
     R32G32B32A32_FLOAT = 24,
     R16G16B16_FLOAT = 25,
     R16G16B16A16_FLOAT = 26
-};
+}
 
-public enum GTSCodec : UInt32
+public enum GTSCodec : uint
 {
     Uniform = 0,
     Color420 = 1,
@@ -106,180 +131,184 @@ public enum GTSCodec : UInt32
     Codec15Normal = 6,
     RawNormal = 7,
     Half = 8,
-    BC = 9,
+    BC3 = 9,
     MultiChannel = 10,
     ASTC = 11
-};
+}
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct GTSHeader
 {
-    public const UInt32 GRPGMagic = 0x47505247; // 'GRPG'
-    public const UInt32 CurrentVersion = 5;
+    public const uint GRPGMagic = 0x47505247;
+    public const uint CurrentVersion = 5;
 
-    public UInt32 Magic;
-    public UInt32 Version;
-    public UInt32 Unused;
+    public uint Magic;
+    public uint Version;
+    public uint Unused;
     public Guid GUID;
-    public UInt32 NumLayers;
-    public UInt64 LayersOffset;
-    public UInt32 NumLevels;
-    public UInt64 LevelsOffset;
-    public Int32 TileWidth;
-    public Int32 TileHeight;
-    public Int32 TileBorder;
+    public uint NumLayers;
+    public ulong LayersOffset;
+    public uint NumLevels;
+    public ulong LevelsOffset;
+    public uint TileWidth;
+    public uint TileHeight;
+    public uint TileBorder;
 
-    public UInt32 I2; // Some tile count?
-    public UInt32 NumFlatTileInfos;
-    public UInt64 FlatTileInfoOffset;
-    public UInt32 I6;
-    public UInt32 I7;
+    public uint I2;
+    public uint NumFlatTileInfos;
+    public ulong FlatTileInfoOffset;
+    public uint I6;
+    public uint I7;
 
-    public UInt32 NumPackedTileIDs;
-    public UInt64 PackedTileIDsOffset;
+    public uint NumPackedTileIDs;
+    public ulong PackedTileIDsOffset;
 
-    public UInt32 M;
-    public UInt32 N;
-    public UInt32 O;
-    public UInt32 P;
-    public UInt32 Q;
-    public UInt32 R;
-    public UInt32 S;
+    public uint M;
+    public uint N;
+    public uint O;
+    public uint P;
+    public uint Q;
+    public uint R;
+    public uint S;
 
-    public UInt32 PageSize;
-    public UInt32 NumPageFiles;
-    public UInt64 PageFileMetadataOffset;
+    public uint PageSize;
+    public uint NumPageFiles;
+    public ulong PageFileMetadataOffset;
 
-    public UInt32 FourCCListSize;
-    public UInt64 FourCCListOffset;
+    public uint FourCCListSize;
+    public ulong FourCCListOffset;
 
-    public UInt32 ParameterBlockHeadersCount;
-    public UInt64 ParameterBlockHeadersOffset;
+    public uint ParameterBlockHeadersCount;
+    public ulong ParameterBlockHeadersOffset;
 
-    public UInt64 ThumbnailsOffset;
-    public UInt32 XJJ;
-    public UInt32 XKK;
-    public UInt32 XLL;
-    public UInt32 XMM;
+    public ulong ThumbnailsOffset;
+    public uint XJJ;
+    public uint XKK;
+    public uint XLL;
+    public uint XMM;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct GTSTileSetLayer
 {
     public GTSDataType DataType;
-    public UInt32 DefaultColor;
+    public uint DefaultColor;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct GTSTileSetLevel
 {
-    public UInt32 Width; // Width in tiles
-    public UInt32 Height; // Height in tiles
-    public UInt64 FlatTileIndicesOffset; // Flat tiles offset in file
+    public uint Width;
+    public uint Height;
+    public ulong FlatTileIndicesOffset;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct GTSParameterBlockHeader
 {
-    public UInt32 ParameterBlockID;
+    public uint ParameterBlockID;
     public GTSCodec Codec;
-    public UInt32 ParameterBlockSize;
-    public UInt64 FileInfoOffset;
+    public uint ParameterBlockSize;
+    public ulong FileInfoOffset;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct GTSBCParameterBlock
 {
-    public UInt16 Version;
-    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
-    public byte[] Compression1;
-    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
-    public byte[] Compression2;
+    public ushort Version;
+    public Compression16Buffer Compression1;
+    public Compression16Buffer Compression2;
 
     public string CompressionName1
     {
-        get
-        {
-            int len;
-            for (len = 0; len < Compression1.Length && Compression1[len] != 0; len ++) {}
-            return Encoding.UTF8.GetString(Compression1, 0, len);
-        }
-        set
-        {
-            Compression1 = new byte[0x10];
-            Array.Clear(Compression1, 0, 0x10);
-            byte[] encoded = Encoding.UTF8.GetBytes(value);
-            Array.Copy(encoded, Compression1, encoded.Length);
-        }
+        readonly get => ExtractStringFromBuffer(MemoryMarshal.CreateReadOnlySpan(ref Unsafe.As<Compression16Buffer, byte>(ref Unsafe.AsRef(in Compression1)), 16), Encoding.UTF8);
+        set => InjectStringToBuffer(value, MemoryMarshal.CreateSpan(ref Unsafe.As<Compression16Buffer, byte>(ref Compression1), 16), Encoding.UTF8);
     }
 
     public string CompressionName2
     {
-        get
-        {
-            int len;
-            for (len = 0; len < Compression2.Length && Compression2[len] != 0; len ++) {}
-            return Encoding.UTF8.GetString(Compression2, 0, len);
-        }
-        set
-        {
-            Compression2 = new byte[0x10];
-            Array.Clear(Compression2, 0, 0x10);
-            byte[] encoded = Encoding.UTF8.GetBytes(value);
-            Array.Copy(encoded, Compression2, encoded.Length);
-        }
+        readonly get => ExtractStringFromBuffer(MemoryMarshal.CreateReadOnlySpan(ref Unsafe.As<Compression16Buffer, byte>(ref Unsafe.AsRef(in Compression2)), 16), Encoding.UTF8);
+        set => InjectStringToBuffer(value, MemoryMarshal.CreateSpan(ref Unsafe.As<Compression16Buffer, byte>(ref Compression2), 16), Encoding.UTF8);
     }
 
-    public UInt32 B;
-    public Byte C1;
-    public Byte C2;
-    public Byte BCField3;
-    public Byte DataType;
-    public UInt16 D;
-    public UInt32 FourCC;
-    public Byte E1;
-    public Byte SaveMip;
-    public Byte E3;
-    public Byte E4;
-    public UInt32 F;
+    public uint B;
+    public byte C1;
+    public byte C2;
+    public byte BCField3;
+    public byte DataType;
+    public ushort D;
+    public uint FourCC;
+    public byte E1;
+    public byte SaveMip;
+    public byte E3;
+    public byte E4;
+    public uint F;
+
+    private static string ExtractStringFromBuffer(ReadOnlySpan<byte> buffer, Encoding encoding)
+    {
+        int length = buffer.IndexOf((byte)0);
+        if (length < 0) length = buffer.Length;
+        return encoding.GetString(buffer[..length]);
+    }
+
+    private static void InjectStringToBuffer(string source, Span<byte> buffer, Encoding encoding)
+    {
+        buffer.Clear();
+        if (string.IsNullOrEmpty(source)) return;
+
+        int encodedBytes = encoding.GetBytes(source, buffer);
+        if (encodedBytes < buffer.Length) buffer[encodedBytes] = 0;
+    }
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct GTSUniformParameterBlock
 {
-    public UInt16 Version;
-    public UInt16 A_Unused;
-    public UInt32 Width;
-    public UInt32 Height;
+    public ushort Version;
+    public ushort A_Unused;
+    public uint Width;
+    public uint Height;
     public GTSDataType DataType;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct GTSPageFileInfo
 {
-    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 512)]
-    public byte[] FileNameBuf;
+    public FileName512Buffer FileNameBuf;
 
-    public UInt32 NumPages;
+    public uint NumPages;
     public Guid Checksum;
-    public UInt32 F; // 2
+    public uint F;
 
-    public string FileName
+    public readonly string FileName
     {
         get
         {
-            int nameLen;
-            for (nameLen = 0; nameLen < FileNameBuf.Length && FileNameBuf[nameLen] != 0; nameLen += 2)
-            {
-            }
-            return Encoding.Unicode.GetString(FileNameBuf, 0, nameLen);
+            ReadOnlySpan<byte> buffer = MemoryMarshal.CreateReadOnlySpan(ref Unsafe.As<FileName512Buffer, byte>(ref Unsafe.AsRef(in FileNameBuf)), 512);
+
+            ReadOnlySpan<ushort> unicodeBuffer = MemoryMarshal.Cast<byte, ushort>(buffer);
+            int nameLen = unicodeBuffer.IndexOf((ushort)0);
+            if (nameLen < 0) nameLen = unicodeBuffer.Length;
+
+            var rawPath = Encoding.Unicode.GetString(buffer[..(nameLen << 1)]);
+            return rawPath.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
         }
         set
         {
-            FileNameBuf = new byte[512];
-            Array.Clear(FileNameBuf, 0, 512);
-            byte[] encoded = Encoding.Unicode.GetBytes(value);
-            Array.Copy(encoded, FileNameBuf, encoded.Length);
+            ref var mutableBuf = ref Unsafe.AsRef(in FileNameBuf);
+            Span<byte> buffer = MemoryMarshal.CreateSpan(ref Unsafe.As<FileName512Buffer, byte>(ref mutableBuf), 512);
+
+            buffer.Clear();
+            if (string.IsNullOrEmpty(value)) return;
+
+            var cleanValue = value.Replace(Path.DirectorySeparatorChar, '\\');
+            int encodedBytes = Encoding.Unicode.GetBytes(cleanValue, buffer);
+
+            if (encodedBytes + 1 < buffer.Length)
+            {
+                buffer[encodedBytes] = 0;
+                buffer[encodedBytes + 1] = 0;
+            }
         }
     }
 }
@@ -287,27 +316,33 @@ public struct GTSPageFileInfo
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct GTSFourCCMetadata
 {
-    public UInt32 FourCC;
-    public Byte Format;
-    public Byte ExtendedLength;
-    public UInt16 Length;
+    public uint FourCC;
+    public byte Format;
+    public byte ExtendedLength;
+    public ushort Length;
 
     public string FourCCName
     {
-        get
+        readonly get
         {
-            return Char.ToString((char)(FourCC & 0xff))
-                + Char.ToString((char)((FourCC >> 8) & 0xff))
-                + Char.ToString((char)((FourCC >> 16) & 0xff))
-                + Char.ToString((char)((FourCC >> 24) & 0xff));
+            uint localFourCC = FourCC;
+            if (!BitConverter.IsLittleEndian)
+            {
+                localFourCC = BinaryPrimitives.ReverseEndianness(localFourCC);
+            }
+            ReadOnlySpan<byte> bytes = MemoryMarshal.CreateReadOnlySpan(ref Unsafe.As<uint, byte>(ref localFourCC), 4);
+            return Encoding.UTF8.GetString(bytes);
         }
-
         set
         {
-            FourCC = (uint)value[0]
-                | ((uint)value[1] << 8)
-                | ((uint)value[2] << 16)
-                | ((uint)value[3] << 24);
+            ArgumentNullException.ThrowIfNull(value);
+            if (value.Length < 4) throw new ArgumentException("FourCC metadata demands a minimal 4 character field matrix.", nameof(value));
+
+            uint localFourCC = 0;
+            Span<byte> bytes = MemoryMarshal.CreateSpan(ref Unsafe.As<uint, byte>(ref localFourCC), 4);
+            Encoding.UTF8.GetBytes(value.AsSpan(0, 4), bytes);
+
+            FourCC = BitConverter.IsLittleEndian ? localFourCC : BinaryPrimitives.ReverseEndianness(localFourCC);
         }
     }
 }
@@ -315,82 +350,57 @@ public struct GTSFourCCMetadata
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct GTSThumbnailInfoHeader
 {
-    public UInt32 NumThumbnails;
-    public UInt32 A;
-    public UInt32 B;
+    public uint NumThumbnails;
+    public uint A;
+    public uint B;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct GTSThumbnailInfo
 {
     public Guid GUID;
-    public UInt64 OffsetInFile;
-    public UInt32 CompressedSize;
-    public UInt32 Unknown1;
-    public UInt16 Unknown2;
-    public UInt16 Unknown3;
+    public ulong OffsetInFile;
+    public uint CompressedSize;
+    public uint Unknown1;
+    public ushort Unknown2;
+    public ushort Unknown3;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
-public struct GTSPackedTileID(UInt32 layer, UInt32 level, UInt32 x, UInt32 y)
+public struct GTSPackedTileID(uint layer, uint level, uint x, uint y)
 {
-    public UInt32 Val = (layer & 0xF)
+    public uint Val = (layer & 0xF)
+
             | ((level & 0xF) << 4)
             | ((y & 0xFFF) << 8)
             | ((x & 0xFFF) << 20);
 
-    public UInt32 Layer
-    {
-        get
-        {
-            return Val & 0x0F;
-        }
-    }
+    public GTSPackedTileID() : this(0, 0, 0, 0) { }
 
-    public UInt32 Level
-    {
-        get
-        {
-            return (Val >> 4) & 0x0F;
-        }
-    }
-
-    public UInt32 Y
-    {
-        get
-        {
-            return (Val >> 8) & 0x0FFF;
-        }
-    }
-
-    public UInt32 X
-    {
-        get
-        {
-            return Val >> 20;
-        }
-    }
+    public readonly uint Layer => Val & 0x0F;
+    public readonly uint Level => (Val >> 4) & 0x0F;
+    public readonly uint Y => (Val >> 8) & 0x0FFF;
+    public readonly uint X => Val >> 20;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct GTSFlatTileInfo
 {
-    public UInt16 PageFileIndex; // Index of file in PageFileInfos
-    public UInt16 PageIndex; // Index of 1MB page
-    public UInt16 ChunkIndex; // Index of entry within page
-    public UInt16 D; // Always 1?
-    public UInt32 PackedTileIndex; // Index of tile in PackedTileIDs
+    public ushort PageFileIndex;
+    public ushort PageIndex;
+    public ushort ChunkIndex;
+    public ushort D;
+    public uint PackedTileIndex;
 }
-
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct GTPHeader
 {
-    public const UInt32 HeaderMagic = 0x50415247;
-    public const UInt32 DefaultVersion = 4;
+    public const uint HeaderMagic = 0x50415247;
+    public const uint DefaultVersion = 4;
 
-    public UInt32 Magic;
-    public UInt32 Version;
+    public uint Magic;
+    public uint Version;
     public Guid GUID;
 }
 
@@ -398,6 +408,6 @@ public struct GTPHeader
 public struct GTPChunkHeader
 {
     public GTSCodec Codec;
-    public UInt32 ParameterBlockID;
-    public UInt32 Size;
+    public uint ParameterBlockID;
+    public uint Size;
 }

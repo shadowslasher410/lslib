@@ -1,63 +1,79 @@
 ﻿using LSLib.LS.Enums;
 using System.Diagnostics;
+using System.Globalization;
 using System.Xml;
 
 namespace LSLib.LS;
 
 public class LSXReader(Stream stream) : IDisposable
 {
-    private Stream stream = stream;
-    private XmlReader reader;
-    private Resource resource;
-    private Region currentRegion;
-    private List<Node> stack;
-    public int lastLine, lastColumn;
-    private LSXVersion Version = LSXVersion.V3;
-    public NodeSerializationSettings SerializationSettings = new();
-    private NodeAttribute LastAttribute = null;
-    private int ValueOffset = 0;
+    private readonly Stream _stream = stream ?? throw new ArgumentNullException(nameof(stream));
+    private XmlReader? _reader;
+    private Resource? _resource;
+    private Region? _currentRegion;
+    private List<Node> _stack = [];
+    public int LastLine { get; set; }
+    public int LastColumn { get; set; }
+    private LSXVersion _version = LSXVersion.V3;
+    public NodeSerializationSettings SerializationSettings { get; set; } = new();
+    private NodeAttribute? _lastAttribute;
+    private int _valueOffset;
 
     public void Dispose()
     {
-        stream.Dispose();
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _stream.Dispose();
+            _reader?.Dispose();
+        }
     }
 
     private void ReadTranslatedFSString(TranslatedFSString fs)
     {
-        fs.Value = reader["value"];
-        fs.Handle = reader["handle"];
-        Debug.Assert(fs.Handle != null);
+        ArgumentNullException.ThrowIfNull(fs);
+        if (_reader is null) return;
 
-        var arguments = Convert.ToInt32(reader["arguments"]);
+        fs.Value = _reader["value"] ?? string.Empty;
+        fs.Handle = _reader["handle"] ?? string.Empty;
+        Debug.Assert(fs.Handle is not null);
+
+        int arguments = Convert.ToInt32(_reader["arguments"], System.Globalization.CultureInfo.InvariantCulture);
         fs.Arguments = new List<TranslatedFSStringArgument>(arguments);
+
         if (arguments > 0)
         {
-            while (reader.Read() && reader.NodeType != XmlNodeType.Element);
-            if (reader.Name != "arguments")
+            while (_reader.Read() && _reader.NodeType != XmlNodeType.Element) { }
+            if (_reader.Name != "arguments")
             {
-                throw new InvalidFormatException(String.Format("Expected <arguments>: {0}", reader.Name));
+                throw new InvalidFormatException(string.Format("Expected <arguments>: {0}", _reader.Name));
             }
 
             int processedArgs = 0;
-            while (processedArgs < arguments && reader.Read())
+            while (processedArgs < arguments && _reader.Read())
             {
-                if (reader.NodeType == XmlNodeType.Element)
+                if (_reader.NodeType == XmlNodeType.Element)
                 {
-                    if (reader.Name != "argument")
+                    if (_reader.Name != "argument")
                     {
-                        throw new InvalidFormatException(String.Format("Expected <argument>: {0}", reader.Name));
+                        throw new InvalidFormatException(string.Format("Expected <argument>: {0}", _reader.Name));
                     }
 
                     var arg = new TranslatedFSStringArgument
                     {
-                        Key = reader["key"],
-                        Value = reader["value"]
+                        Key = _reader["key"] ?? string.Empty,
+                        Value = _reader["value"] ?? string.Empty
                     };
 
-                    while (reader.Read() && reader.NodeType != XmlNodeType.Element);
-                    if (reader.Name != "string")
+                    while (_reader.Read() && _reader.NodeType != XmlNodeType.Element) { }
+                    if (_reader.Name != "string")
                     {
-                        throw new InvalidFormatException(String.Format("Expected <string>: {0}", reader.Name));
+                        throw new InvalidFormatException(string.Format("Expected <string>: {0}", _reader.Name));
                     }
 
                     arg.String = new TranslatedFSString();
@@ -66,178 +82,191 @@ public class LSXReader(Stream stream) : IDisposable
                     fs.Arguments.Add(arg);
                     processedArgs++;
 
-                    while (reader.Read() && reader.NodeType != XmlNodeType.EndElement);
+                    while (_reader.Read() && _reader.NodeType != XmlNodeType.EndElement) { }
                 }
             }
 
-            while (reader.Read() && reader.NodeType != XmlNodeType.EndElement);
-            // Close outer element
-            while (reader.Read() && reader.NodeType != XmlNodeType.EndElement);
+            while (_reader.Read() && _reader.NodeType != XmlNodeType.EndElement) { }
+            while (_reader.Read() && _reader.NodeType != XmlNodeType.EndElement) { }
             Debug.Assert(processedArgs == arguments);
         }
     }
 
     private void ReadElement()
     {
-        switch (reader.Name)
+        if (_reader is null || _resource is null) return;
+
+        string elementName = _reader.Name;
+        switch (elementName)
         {
             case "save":
-                // Root element
-                if (stack.Count > 0)
+                if (_stack.Count > 0)
                     throw new InvalidFormatException("Node <save> was unexpected.");
                 break;
 
             case "header":
-                // LSX metadata part 1
-                resource.Metadata.Timestamp = Convert.ToUInt64(reader["time"]);
+                _resource.Metadata.Timestamp = Convert.ToUInt64(_reader["time"], CultureInfo.InvariantCulture);
                 break;
 
             case "version":
-                // LSX metadata part 2
-                resource.Metadata.MajorVersion = Convert.ToUInt32(reader["major"]);
-                resource.Metadata.MinorVersion = Convert.ToUInt32(reader["minor"]);
-                resource.Metadata.Revision = Convert.ToUInt32(reader["revision"]);
-                resource.Metadata.BuildNumber = Convert.ToUInt32(reader["build"]);
-                Version = (resource.Metadata.MajorVersion >= 4) ? LSXVersion.V4 : LSXVersion.V3;
-                var lslibMeta = reader["lslib_meta"];
-                SerializationSettings.InitFromMeta(lslibMeta ?? "");
-                resource.MetadataFormat = SerializationSettings.LSFMetadata;
+                _resource.Metadata.MajorVersion = Convert.ToUInt32(_reader["major"], CultureInfo.InvariantCulture);
+                _resource.Metadata.MinorVersion = Convert.ToUInt32(_reader["minor"], CultureInfo.InvariantCulture);
+                _resource.Metadata.Revision = Convert.ToUInt32(_reader["revision"], CultureInfo.InvariantCulture);
+                _resource.Metadata.BuildNumber = Convert.ToUInt32(_reader["build"], CultureInfo.InvariantCulture);
+                _version = (_resource.Metadata.MajorVersion >= 4) ? LSXVersion.V4 : LSXVersion.V3;
+
+                var lslibMeta = _reader["lslib_meta"];
+                SerializationSettings.InitFromMeta(lslibMeta ?? string.Empty);
+                _resource.MetadataFormat = SerializationSettings.LSFMetadata;
                 break;
 
             case "region":
-                if (currentRegion != null)
+                if (_currentRegion is not null)
                     throw new InvalidFormatException("A <region> can only start at the root level of a resource.");
 
-                Debug.Assert(!reader.IsEmptyElement);
-                var region = new Region();
-                region.RegionName = reader["id"];
-                Debug.Assert(region.RegionName != null);
-                resource.Regions.Add(region.RegionName, region);
-                currentRegion = region;
+                Debug.Assert(!_reader.IsEmptyElement);
+                var region = new Region
+                {
+                    RegionName = _reader["id"] ?? throw new InvalidFormatException("Missing required attribute 'id' in <region> element.")
+                };
+                Debug.Assert(region.RegionName is not null);
+                _resource.Regions.Add(region.RegionName, region);
+                _currentRegion = region;
                 break;
 
             case "node":
-                if (currentRegion == null)
+                if (_currentRegion is null)
                     throw new InvalidFormatException("A <node> must be located inside a region.");
 
                 Node node;
-                if (stack.Count == 0)
+                if (_stack.Count == 0)
                 {
-                    // The node is the root node of the region
-                    node = currentRegion;
+                    node = _currentRegion;
                 }
                 else
                 {
-                    // New node under the current parent
+                    int lineNum = 0;
+                    if (_reader is IXmlLineInfo lineInfo && lineInfo.HasLineInfo())
+                    {
+                        lineNum = lineInfo.LineNumber;
+                    }
+
                     node = new Node
                     {
-                        Parent = stack.Last(),
-                        Line = ((IXmlLineInfo)reader).LineNumber
+                        Parent = _stack.Last(),
+                        Line = lineNum
                     };
                 }
 
-                node.Name = reader["id"];
-                Debug.Assert(node.Name != null);
+                node.Name = _reader["id"] ?? throw new InvalidFormatException("Missing required attribute 'id' in <node> element.");
+                Debug.Assert(node.Name is not null);
                 node.Parent?.AppendChild(node);
 
-                node.KeyAttribute = reader["key"];
+                node.KeyAttribute = _reader["key"] ?? string.Empty;
 
-                if (!reader.IsEmptyElement)
-                    stack.Add(node);
+                if (!_reader.IsEmptyElement)
+                    _stack.Add(node);
                 break;
 
             case "attribute":
-                UInt32 attrTypeId;
-                if (!UInt32.TryParse(reader["type"], out attrTypeId))
+                uint attrTypeId;
+                string? typeAttr = _reader["type"] ?? throw new InvalidFormatException("Missing required attribute 'type' in <attribute> element.");
+                if (!uint.TryParse(typeAttr, out attrTypeId))
                 {
-                    attrTypeId = (uint)AttributeTypeMaps.TypeToId[reader["type"]];
+                    attrTypeId = (uint)AttributeTypeMaps.TypeToId[typeAttr];
                 }
 
-                var attrName = reader["id"];
-                if (attrTypeId > (int)AttributeType.Max)
-                    throw new InvalidFormatException(String.Format("Unsupported attribute data type: {0}", attrTypeId));
+                var attrName = _reader["id"] ?? throw new InvalidFormatException("Missing required attribute 'id' in <attribute> element.");
+                if (attrTypeId > (uint)AttributeType.Max)
+                    throw new InvalidFormatException(string.Format("Unsupported attribute data type: {0}", attrTypeId));
 
-                Debug.Assert(attrName != null);
+                Debug.Assert(attrName is not null);
+
+                int attrLineNum = 0;
+                if (_reader is IXmlLineInfo attrLineInfo && attrLineInfo.HasLineInfo())
+                {
+                    attrLineNum = attrLineInfo.LineNumber;
+                }
+
                 var attr = new NodeAttribute((AttributeType)attrTypeId)
                 {
-                    Line = ((IXmlLineInfo)reader).LineNumber
+                    Line = attrLineNum
                 };
 
-                var attrValue = reader["value"];
-                if (attrValue != null)
+                var attrValue = _reader["value"];
+                if (attrValue is not null)
                 {
                     attr.FromString(attrValue, SerializationSettings);
                 }
                 else
                 {
-                    // Preallocate value for vector/matrix types
                     switch (attr.Type)
                     {
                         case AttributeType.Vec2: attr.Value = new float[2]; break;
                         case AttributeType.Vec3: attr.Value = new float[3]; break;
                         case AttributeType.Vec4: attr.Value = new float[4]; break;
-                        case AttributeType.Mat2: attr.Value = new float[2*2]; break;
-                        case AttributeType.Mat3: attr.Value = new float[3*3]; break;
-                        case AttributeType.Mat3x4: attr.Value = new float[3*4]; break;
-                        case AttributeType.Mat4: attr.Value = new float[4*4]; break;
-                        case AttributeType.Mat4x3: attr.Value = new float[4*3]; break;
+                        case AttributeType.Mat2: attr.Value = new float[2 * 2]; break;
+                        case AttributeType.Mat3: attr.Value = new float[3 * 3]; break;
+                        case AttributeType.Mat3x4: attr.Value = new float[3 * 4]; break;
+                        case AttributeType.Mat4: attr.Value = new float[4 * 4]; break;
+                        case AttributeType.Mat4x3: attr.Value = new float[4 * 3]; break;
                         case AttributeType.TranslatedString: break;
                         case AttributeType.TranslatedFSString: break;
-                        default: throw new Exception($"Attribute of type {attr.Type} should have an inline value!");
+                        default: throw new InvalidOperationException($"Attribute of type {attr.Type} should have an inline value!");
                     }
 
-                    ValueOffset = 0;
-                    LastAttribute = attr;
+                    _valueOffset = 0;
+                    _lastAttribute = attr;
                 }
 
                 if (attr.Type == AttributeType.TranslatedString)
                 {
                     attr.Value ??= new TranslatedString();
+                    var ts = (TranslatedString)attr.Value;
+                    ts.Handle = _reader["handle"] ?? string.Empty;
+                    Debug.Assert(ts.Handle is not null);
 
-                    var ts = ((TranslatedString)attr.Value);
-                    ts.Handle = reader["handle"];
-                    Debug.Assert(ts.Handle != null);
-
-                    if (attrValue == null)
+                    if (attrValue is null)
                     {
-                        ts.Version = UInt16.Parse(reader["version"]);
+                        ts.Version = ushort.Parse(_reader["version"] ?? "0", CultureInfo.InvariantCulture);
                     }
                 }
                 else if (attr.Type == AttributeType.TranslatedFSString)
                 {
-                    var fs = ((TranslatedFSString)attr.Value);
+                    attr.Value ??= new TranslatedFSString();
+                    var fs = (TranslatedFSString)attr.Value;
                     ReadTranslatedFSString(fs);
                 }
 
-                stack.Last().Attributes.Add(attrName, attr);
+                _stack.Last().Attributes.Add(attrName, attr);
                 break;
 
             case "float2":
+                if (_lastAttribute?.Value is float[] f2Val)
                 {
-                    var val = (float[])LastAttribute.Value;
-                    val[ValueOffset++] = Single.Parse(reader["x"]);
-                    val[ValueOffset++] = Single.Parse(reader["y"]);
-                    break;
+                    f2Val[_valueOffset++] = float.Parse(_reader["x"] ?? "0", CultureInfo.InvariantCulture);
+                    f2Val[_valueOffset++] = float.Parse(_reader["y"] ?? "0", CultureInfo.InvariantCulture);
                 }
+                break;
 
             case "float3":
+                if (_lastAttribute?.Value is float[] f3Val)
                 {
-                    var val = (float[])LastAttribute.Value;
-                    val[ValueOffset++] = Single.Parse(reader["x"]);
-                    val[ValueOffset++] = Single.Parse(reader["y"]);
-                    val[ValueOffset++] = Single.Parse(reader["z"]);
-                    break;
+                    f3Val[_valueOffset++] = float.Parse(_reader["x"] ?? "0", CultureInfo.InvariantCulture);
+                    f3Val[_valueOffset++] = float.Parse(_reader["y"] ?? "0", CultureInfo.InvariantCulture);
+                    f3Val[_valueOffset++] = float.Parse(_reader["z"] ?? "0", CultureInfo.InvariantCulture);
                 }
+                break;
 
             case "float4":
+                if (_lastAttribute?.Value is float[] f4Val)
                 {
-                    var val = (float[])LastAttribute.Value;
-                    val[ValueOffset++] = Single.Parse(reader["x"]);
-                    val[ValueOffset++] = Single.Parse(reader["y"]);
-                    val[ValueOffset++] = Single.Parse(reader["z"]);
-                    val[ValueOffset++] = Single.Parse(reader["w"]);
-                    break;
+                    f4Val[_valueOffset++] = float.Parse(_reader["x"] ?? "0", CultureInfo.InvariantCulture);
+                    f4Val[_valueOffset++] = float.Parse(_reader["y"] ?? "0", CultureInfo.InvariantCulture);
+                    f4Val[_valueOffset++] = float.Parse(_reader["z"] ?? "0", CultureInfo.InvariantCulture);
+                    f4Val[_valueOffset++] = float.Parse(_reader["w"] ?? "0", CultureInfo.InvariantCulture);
                 }
+                break;
 
             case "mat2":
             case "mat3":
@@ -250,13 +279,15 @@ public class LSXReader(Stream stream) : IDisposable
                 break;
 
             default:
-                throw new InvalidFormatException($"Unknown element encountered: {reader.Name}");
+                throw new InvalidFormatException($"Unknown element signature encountered during parsing pass: {elementName}");
         }
     }
 
     private void ReadEndElement()
     {
-        switch (reader.Name)
+        if (_reader is null) return;
+
+        switch (_reader.Name)
         {
             case "save":
             case "header":
@@ -267,14 +298,17 @@ public class LSXReader(Stream stream) : IDisposable
                 break;
 
             case "region":
-                Debug.Assert(stack.Count == 0);
-                Debug.Assert(currentRegion != null);
-                Debug.Assert(currentRegion.Name != null);
-                currentRegion = null;
+                Debug.Assert(_stack.Count == 0);
+                Debug.Assert(_currentRegion is not null);
+                Debug.Assert(_currentRegion.Name is not null);
+                _currentRegion = null;
                 break;
 
             case "node":
-                stack.RemoveAt(stack.Count - 1);
+                if (_stack.Count > 0)
+                {
+                    _stack.RemoveAt(_stack.Count - 1);
+                }
                 break;
 
             // Value nodes, processed in ReadElement()
@@ -287,43 +321,57 @@ public class LSXReader(Stream stream) : IDisposable
                 break;
 
             default:
-                throw new InvalidFormatException(String.Format("Unknown element encountered: {0}", reader.Name));
+                throw new InvalidFormatException(string.Format("Unknown XML closing element encountered: {0}", _reader.Name));
         }
     }
 
     private void ReadInternal()
     {
-        using (this.reader = XmlReader.Create(stream))
+        var settings = new XmlReaderSettings
         {
-            try
+            CloseInput = false,
+            IgnoreComments = true,
+            IgnoreWhitespace = true
+        };
+
+        _reader = XmlReader.Create(_stream, settings);
+        try
+        {
+            while (_reader.Read())
             {
-                while (reader.Read())
+                if (_reader.NodeType == XmlNodeType.Element)
                 {
-                    if (reader.NodeType == XmlNodeType.Element)
-                    {
-                        ReadElement();
-                    }
-                    else if (reader.NodeType == XmlNodeType.EndElement)
-                    {
-                        ReadEndElement();
-                    }
+                    ReadElement();
                 }
-            } catch (Exception)
-            {
-                lastLine = ((IXmlLineInfo)reader).LineNumber;
-                lastColumn = ((IXmlLineInfo)reader).LinePosition;
-                throw;
+                else if (_reader.NodeType == XmlNodeType.EndElement)
+                {
+                    ReadEndElement();
+                }
             }
+        }
+        catch (Exception)
+        {
+            if (_reader is IXmlLineInfo lineInfo && lineInfo.HasLineInfo())
+            {
+                LastLine = lineInfo.LineNumber;
+                LastColumn = lineInfo.LinePosition;
+            }
+            throw;
+        }
+        finally
+        {
+            _reader.Dispose();
         }
     }
 
     public Resource Read()
     {
-        resource = new Resource();
-        currentRegion = null;
-        stack = [];
-        lastLine = lastColumn = 0;
-        var resultResource = resource;
+        _resource = new Resource();
+        _currentRegion = null;
+        _stack = [];
+        LastLine = LastColumn = 0;
+
+        var resultResource = _resource;
 
         try
         {
@@ -331,9 +379,9 @@ public class LSXReader(Stream stream) : IDisposable
         }
         catch (Exception e)
         {
-            if (lastLine > 0)
+            if (LastLine > 0)
             {
-                throw new Exception($"Parsing error at or near line {lastLine}, column {lastColumn}:{Environment.NewLine}{e.Message}", e);
+                throw new Exception($"Parsing error at or near line {LastLine}, column {LastColumn}:{Environment.NewLine}{e.Message}", e);
             }
             else
             {
@@ -342,9 +390,9 @@ public class LSXReader(Stream stream) : IDisposable
         }
         finally
         {
-            resource = null;
-            currentRegion = null;
-            stack = null;
+            _resource = null;
+            _currentRegion = null;
+            _stack = [];
         }
 
         return resultResource;

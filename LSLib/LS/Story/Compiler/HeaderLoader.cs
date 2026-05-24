@@ -1,4 +1,7 @@
 ﻿using LSLib.LS.Story.HeaderParser;
+using Superpower;
+using Superpower.Model;
+using System.Globalization;
 
 namespace LSLib.LS.Story.Compiler;
 
@@ -6,27 +9,25 @@ namespace LSLib.LS.Story.Compiler;
 /// Responsible for parsing story header files (story_header.div),
 /// and loading header definitions to the compilation context.
 /// </summary>
-public class StoryHeaderLoader
+public class StoryHeaderLoader(CompilationContext context)
 {
-    private CompilationContext Context;
+    private readonly CompilationContext _context = context ?? throw new ArgumentNullException(nameof(context));
 
-    public StoryHeaderLoader(CompilationContext context)
-    {
-        Context = context;
-    }
 
     /// <summary>
     /// Creates and loads a type alias (e.g. CHARACTERGUID, ITEMGUID, etc.) from an AST node.
     /// </summary>
     private bool LoadAliasFromAST(ASTAlias astAlias)
     {
+        ArgumentNullException.ThrowIfNull(astAlias);
+
         var type = new ValueType
         {
-            Name = astAlias.TypeName,
+            Name = astAlias.TypeName ?? string.Empty,
             TypeId = astAlias.TypeId,
             IntrinsicTypeId = (Value.Type)astAlias.AliasId
         };
-        return Context.RegisterType(type);
+        return _context.RegisterType(type);
     }
 
     /// <summary>
@@ -34,24 +35,28 @@ public class StoryHeaderLoader
     /// </summary>
     private bool LoadFunctionFromAST(ASTFunction astFunction)
     {
+        ArgumentNullException.ThrowIfNull(astFunction);
+
         var args = new List<FunctionParam>(astFunction.Params.Count);
         foreach (var astParam in astFunction.Params)
         {
-            var type = Context.LookupType(astParam.Type);
+            if (astParam is null) continue;
+
+            var type = _context.LookupType(astParam.Type);
             // Since types and alias types are declared at the beginning of the
-            // story header, we shold have full type information here, so any
+            // story header, we should have full type information here, so any
             // unresolved types will be flagged as an error.
-            if (type == null)
+            if (type is null)
             {
-                Context.Log.Error(null, DiagnosticCode.UnresolvedTypeInSignature,
-                    String.Format("Function \"{0}({1})\" argument \"{2}\" has unresolved type \"{3}\"",
+                _context.Log.Error(null, DiagnosticCode.UnresolvedTypeInSignature,
+                    string.Format(CultureInfo.InvariantCulture, "Function \"{0}({1})\" argument \"{2}\" has unresolved type \"{3}\"",
                         astFunction.Name, astFunction.Params.Count, astParam.Name, astParam.Type));
                 continue;
             }
 
             var param = new FunctionParam
             {
-                Name = astParam.Name,
+                Name = astParam.Name ?? string.Empty,
                 Type = type,
                 Direction = astParam.Direction
             };
@@ -60,7 +65,7 @@ public class StoryHeaderLoader
 
         var signature = new FunctionSignature
         {
-            Name = astFunction.Name,
+            Name = astFunction.Name ?? string.Empty,
             Type = astFunction.Type,
             Params = args,
             FullyTyped = true,
@@ -78,27 +83,30 @@ public class StoryHeaderLoader
             Meta4 = astFunction.Meta4
         };
 
-        return Context.RegisterFunction(signature, func);
+        return _context.RegisterFunction(signature, func);
     }
 
     /// <summary>
     /// Parses a story header file into an AST.
     /// </summary>
-    public ASTDeclarations ParseHeader(Stream stream)
+    public static ASTDeclarations? ParseHeader(Stream stream)
     {
-        var scanner = new HeaderScanner();
-        scanner.SetSource(stream);
-        var parser = new HeaderParser.HeaderParser(scanner);
-        bool parsed = parser.Parse();
+        ArgumentNullException.ThrowIfNull(stream);
 
-        if (parsed)
+        using var reader = new StreamReader(stream, System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 4096, leaveOpen: true);
+        string fileContent = reader.ReadToEnd();
+
+        if (string.IsNullOrWhiteSpace(fileContent)) return null;
+        TokenList<HeaderTokens> tokens = HeaderTokenizer.Instance.Tokenize(fileContent);
+        TokenListParserResult<HeaderTokens, ASTDeclarations> result = HeaderCombinatorParser.HeaderFileParser.TryParse(tokens);
+
+        if (!result.HasValue)
         {
-            return parser.GetDeclarations();
+            Position errorPos = result.ErrorPosition;
+            throw new InvalidDataException($"Story Header syntax fault at line {errorPos.Line}, column {errorPos.Column}: {result.ErrorMessage}");
         }
-        else
-        {
-            return null;
-        }
+
+        return result.Value;
     }
 
     /// <summary>
@@ -106,14 +114,16 @@ public class StoryHeaderLoader
     /// </summary>
     public void LoadHeader(ASTDeclarations declarations)
     {
+        ArgumentNullException.ThrowIfNull(declarations);
+
         foreach (var alias in declarations.Aliases)
         {
-            LoadAliasFromAST(alias);
+            if (alias is not null) LoadAliasFromAST(alias);
         }
 
         foreach (var func in declarations.Functions)
         {
-            LoadFunctionFromAST(func);
+            if (func is not null) LoadFunctionFromAST(func);
         }
     }
 }

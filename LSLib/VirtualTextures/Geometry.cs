@@ -1,60 +1,74 @@
 ﻿namespace LSLib.VirtualTextures;
 
-public class TileSetGeometryCalculator
+public sealed class TileSetGeometryCalculator
 {
-    public List<BuildTexture> Textures;
-    public TileSetBuildData BuildData;
+    public List<BuildTexture> Textures { get; init; } = [];
+    public TileSetBuildData BuildData { get; init; } = new();
 
-    private int PlacementTileWidth = 0x1000;
-    private int PlacementTileHeight = 0x1000;
-    private int PlacementGridWidth;
-    private int PlacementGridHeight;
-    private BuildTexture[] PlacementGrid;
+    private int _placementTileWidth = 0x1000;
+    private int _placementTileHeight = 0x1000;
+    private int _placementGridWidth;
+    private int _placementGridHeight;
+    private BuildTexture[] _placementGrid = [];
 
     private void ResizePlacementGrid(int w, int h)
     {
-        PlacementGridWidth = w;
-        PlacementGridHeight = h;
-        PlacementGrid = new BuildTexture[w * h];
+        _placementGridWidth = w;
+        _placementGridHeight = h;
+
+        int size = w * h;
+        if (_placementGrid.Length < size)
+        {
+            _placementGrid = new BuildTexture[size];
+        }
+        else
+        {
+            _placementGrid.AsSpan(0, size).Clear();
+        }
     }
 
     private void GrowPlacementGrid()
     {
-        if (PlacementGridWidth * PlacementTileWidth <= PlacementGridHeight * PlacementTileHeight)
+        if (_placementGridWidth * _placementTileWidth <= _placementGridHeight * _placementTileHeight)
         {
-            ResizePlacementGrid(PlacementGridWidth * 2, PlacementGridHeight);
+            ResizePlacementGrid(_placementGridWidth << 1, _placementGridHeight);
         }
         else
         {
-            ResizePlacementGrid(PlacementGridWidth, PlacementGridHeight * 2);
+            ResizePlacementGrid(_placementGridWidth, _placementGridHeight << 1);
         }
     }
 
     private bool TryToPlaceTexture(BuildTexture texture, int texX, int texY)
     {
-        var width = texture.Width / BuildData.RawTileWidth / PlacementTileWidth;
-        var height = texture.Height / BuildData.RawTileHeight / PlacementTileHeight;
+        var width = texture.Width / BuildData.RawTileWidth / _placementTileWidth;
+        var height = texture.Height / BuildData.RawTileHeight / _placementTileHeight;
 
+        if (texX + width > _placementGridWidth || texY + height > _placementGridHeight)
+        {
+            return false;
+        }
+
+        ReadOnlySpan<BuildTexture> gridSpan = _placementGrid;
         for (var y = texY; y < texY + height; y++)
         {
-            for (var x = texX; x < texX + width; x++)
+            var rowOffset = y * _placementGridWidth;
+            var rowSlice = gridSpan.Slice(rowOffset + texX, width);
+
+            if (rowSlice.IndexOfAnyExcept((BuildTexture)null!) >= 0)
             {
-                if (PlacementGrid[x + y * PlacementGridWidth] != null)
-                {
-                    return false;
-                }
+                return false;
             }
         }
 
-        texture.X = texX * PlacementTileWidth * BuildData.RawTileWidth;
-        texture.Y = texY * PlacementTileHeight * BuildData.RawTileHeight;
+        texture.X = texX * _placementTileWidth * BuildData.RawTileWidth;
+        texture.Y = texY * _placementTileHeight * BuildData.RawTileHeight;
 
+        Span<BuildTexture> writableGrid = _placementGrid;
         for (var y = texY; y < texY + height; y++)
         {
-            for (var x = texX; x < texX + width; x++)
-            {
-                PlacementGrid[x + y * PlacementGridWidth] = texture;
-            }
+            var rowOffset = y * _placementGridWidth;
+            writableGrid.Slice(rowOffset + texX, width).Fill(texture);
         }
 
         return true;
@@ -62,12 +76,12 @@ public class TileSetGeometryCalculator
 
     private bool TryToPlaceTexture(BuildTexture texture)
     {
-        var width = texture.Width / BuildData.RawTileWidth / PlacementTileWidth;
-        var height = texture.Height / BuildData.RawTileHeight / PlacementTileHeight;
+        var width = texture.Width / BuildData.RawTileWidth / _placementTileWidth;
+        var height = texture.Height / BuildData.RawTileHeight / _placementTileHeight;
 
-        for (var y = 0; y < PlacementGridHeight - height + 1; y++)
+        for (var y = 0; y < _placementGridHeight - height + 1; y++)
         {
-            for (var x = 0; x < PlacementGridWidth - width + 1; x++)
+            for (var x = 0; x < _placementGridWidth - width + 1; x++)
             {
                 if (TryToPlaceTexture(texture, x, y))
                 {
@@ -81,14 +95,13 @@ public class TileSetGeometryCalculator
 
     private bool PlaceAllTextures()
     {
-        foreach (var tex in Textures)
+        foreach (var tex in CollectionsMarshal.AsSpan(Textures))
         {
             if (!TryToPlaceTexture(tex))
             {
                 return false;
             }
         }
-
         return true;
     }
 
@@ -97,29 +110,34 @@ public class TileSetGeometryCalculator
         var startingX = 0;
         var startingY = 0;
 
-        foreach (var tex in Textures)
+        foreach (var tex in CollectionsMarshal.AsSpan(Textures))
         {
-            PlacementTileWidth = Math.Min(PlacementTileWidth, tex.Width / BuildData.RawTileWidth);
-            PlacementTileHeight = Math.Min(PlacementTileHeight, tex.Height / BuildData.RawTileHeight);
+            _placementTileWidth = Math.Min(_placementTileWidth, tex.Width / BuildData.RawTileWidth);
+            _placementTileHeight = Math.Min(_placementTileHeight, tex.Height / BuildData.RawTileHeight);
             startingX = Math.Max(startingX, tex.Width / BuildData.RawTileWidth);
             startingY = Math.Max(startingY, tex.Height / BuildData.RawTileHeight);
         }
 
-        ResizePlacementGrid(startingX / PlacementTileWidth, startingY / PlacementTileHeight);
+        if (_placementTileWidth == 0 || _placementTileHeight == 0)
+        {
+            throw new InvalidOperationException("Malformed image resolution parameters encountered during packer alignment sweeps.");
+        }
+
+        ResizePlacementGrid(startingX / _placementTileWidth, startingY / _placementTileHeight);
 
         while (!PlaceAllTextures())
         {
             GrowPlacementGrid();
         }
 
-        BuildData.TotalWidth = PlacementTileWidth * PlacementGridWidth * BuildData.RawTileWidth;
-        BuildData.TotalHeight = PlacementTileHeight * PlacementGridHeight * BuildData.RawTileWidth;
+        BuildData.TotalWidth = _placementTileWidth * _placementGridWidth * BuildData.RawTileWidth;
+        BuildData.TotalHeight = _placementTileHeight * _placementGridHeight * BuildData.RawTileWidth;
     }
 
     private void UpdateGeometry()
     {
         var minTexSize = 0x10000;
-        foreach (var tex in Textures)
+        foreach (var tex in CollectionsMarshal.AsSpan(Textures))
         {
             minTexSize = Math.Min(minTexSize, Math.Min(tex.Height / BuildData.RawTileHeight, tex.Width / BuildData.RawTileHeight));
         }
@@ -131,7 +149,6 @@ public class TileSetGeometryCalculator
             minTexSize >>= 1;
         }
 
-        // Min W/H of all textures
         var minSize = Math.Min(BuildData.TotalWidth / BuildData.RawTileHeight, BuildData.TotalHeight / BuildData.RawTileHeight);
         BuildData.PageFileLevels = 0;
         while (minSize > 0)
@@ -142,7 +159,7 @@ public class TileSetGeometryCalculator
 
         BuildData.BuildLevels = BuildData.PageFileLevels + 1;
 
-        foreach (var layer in BuildData.Layers)
+        foreach (var layer in CollectionsMarshal.AsSpan(BuildData.Layers))
         {
             var levelWidth = BuildData.TotalWidth;
             var levelHeight = BuildData.TotalHeight;
@@ -150,8 +167,9 @@ public class TileSetGeometryCalculator
             layer.Levels = new List<BuildLevel>(BuildData.BuildLevels);
             for (var i = 0; i < BuildData.BuildLevels; i++)
             {
-                var tilesX = levelWidth / BuildData.RawTileWidth + (((levelWidth % BuildData.RawTileWidth) > 0) ? 1 : 0);
-                var tilesY = levelHeight / BuildData.RawTileHeight + (((levelHeight % BuildData.RawTileHeight) > 0) ? 1 : 0);
+                var tilesX = (levelWidth / BuildData.RawTileWidth) + ((levelWidth % BuildData.RawTileWidth > 0) ? 1 : 0);
+                var tilesY = (levelHeight / BuildData.RawTileHeight) + ((levelHeight % BuildData.RawTileHeight > 0) ? 1 : 0);
+
                 var level = new BuildLevel
                 {
                     Level = i,
@@ -165,8 +183,8 @@ public class TileSetGeometryCalculator
                 };
                 layer.Levels.Add(level);
 
-                levelWidth = Math.Max(1, levelWidth >> 1);
-                levelHeight = Math.Max(1, levelHeight >> 1);
+                levelWidth = Math.Max(1, levelWidth >>= 1);
+                levelHeight = Math.Max(1, levelHeight >>= 1);
             }
         }
     }

@@ -1,15 +1,20 @@
-﻿namespace LSLib.LS.Story;
+﻿using System;
+using System.IO;
+
+namespace LSLib.LS.Story;
 
 public abstract class RelNode : TreeNode
 {
-    public NodeReference ParentRef;
-    public AdapterReference AdapterRef;
-    public NodeReference RelDatabaseNodeRef;
-    public NodeEntryItem RelJoin;
-    public byte RelDatabaseIndirection;
+    public NodeReference ParentRef { get; set; } = new();
+    public AdapterReference AdapterRef { get; set; } = new();
+    public NodeReference RelDatabaseNodeRef { get; set; } = new();
+    public NodeEntryItem RelJoin { get; set; } = new();
+    public byte RelDatabaseIndirection { get; set; }
 
     public override void Read(OsiReader reader)
     {
+        ArgumentNullException.ThrowIfNull(reader);
+
         base.Read(reader);
         ParentRef = reader.ReadNodeRef();
         AdapterRef = reader.ReadAdapterRef();
@@ -22,6 +27,8 @@ public abstract class RelNode : TreeNode
 
     public override void Write(OsiWriter writer)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+
         base.Write(writer);
         ParentRef.Write(writer);
         AdapterRef.Write(writer);
@@ -33,22 +40,36 @@ public abstract class RelNode : TreeNode
 
     public override void PostLoad(Story story)
     {
+        ArgumentNullException.ThrowIfNull(story);
+
         base.PostLoad(story);
 
         if (AdapterRef.IsValid)
         {
-            var adapter = AdapterRef.Resolve();
-            if (adapter.OwnerNode != null)
-            {
-                throw new InvalidDataException("An adapter cannot be assigned to multiple join/rel nodes!");
-            }
+            Adapter? adapter = AdapterRef.Resolve();
 
-            adapter.OwnerNode = this;
+            if (adapter is not null)
+            {
+                if (adapter.OwnerNode is not null)
+                {
+                    throw new InvalidDataException("An adapter cannot be assigned to multiple join/rel nodes!");
+                }
+
+                adapter.OwnerNode = this;
+            }
+            else
+            {
+                throw new InvalidDataException($"Failed to resolve required Adapter reference layout with Index: {AdapterRef.Index}");
+            }
         }
     }
 
+
     public override void DebugDump(TextWriter writer, Story story)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(story);
+
         base.DebugDump(writer, story);
 
         writer.Write("   ");
@@ -73,6 +94,6 @@ public abstract class RelNode : TreeNode
             RelJoin.DebugDump(writer, story);
         }
 
-        writer.WriteLine("");
+        writer.WriteLine();
     }
 }

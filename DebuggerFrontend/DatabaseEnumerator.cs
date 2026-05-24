@@ -1,96 +1,85 @@
 ﻿using LSLib.LS.Story.Compiler;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using System.Runtime.InteropServices;
 
 namespace LSTools.DebuggerFrontend;
 
-public class RequestFailedException : Exception
+public class RequestFailedException(string message) : Exception(message);
+
+class DatabaseEnumerator(
+    DebuggerClient dbgClient,
+    DAPStream dap,
+    StoryDebugInfo debugInfo,
+    EvaluationResultManager resultManager)
 {
-    public RequestFailedException(string message)
-        : base(message)
+    private readonly Dictionary<uint, List<DAPRequest>> _pendingDatabaseRequests = [];
+    private readonly Dictionary<uint, EvaluationResults> _databaseContents = [];
+
+    public void InitializeCallbacks()
     {
-    }
-}
-
-class DatabaseEnumerator
-{
-    private StoryDebugInfo DebugInfo;
-    DAPStream DAP;
-    private DebuggerClient DbgClient;
-    private ValueFormatter Formatter;
-    private EvaluationResultManager ResultManager;
-    // Databases that we'll have to send to the debugger after receipt
-    private Dictionary<UInt32, List<DAPRequest>> PendingDatabaseRequests = new Dictionary<UInt32, List<DAPRequest>>();
-    // Database contents that we're receiving from the backend
-    private Dictionary<UInt32, EvaluationResults> DatabaseContents = new Dictionary<UInt32, EvaluationResults>();
-
-    public DatabaseEnumerator(DebuggerClient dbgClient, DAPStream dap, StoryDebugInfo debugInfo, ValueFormatter formatter,
-        EvaluationResultManager resultManager)
-    {
-        DebugInfo = debugInfo;
-        DAP = dap;
-        DbgClient = dbgClient;
-        Formatter = formatter;
-        ResultManager = resultManager;
-
-        DbgClient.OnBeginDatabaseContents = this.OnBeginDatabaseContents;
-        DbgClient.OnDatabaseRow = this.OnDatabaseRow;
-        DbgClient.OnEndDatabaseContents = this.OnEndDatabaseContents;
+        dbgClient.OnBeginDatabaseContents = OnBeginDatabaseContents;
+        dbgClient.OnDatabaseRow = OnDatabaseRow;
+        dbgClient.OnEndDatabaseContents = OnEndDatabaseContents;
     }
 
-    public void RequestDatabaseEvaluation(DAPRequest request, UInt32 databaseId)
+    public void RequestDatabaseEvaluation(DAPRequest request, uint databaseId)
     {
-        List<DAPRequest> requests;
-        if (!PendingDatabaseRequests.TryGetValue(databaseId, out requests))
+        ArgumentNullException.ThrowIfNull(request);
+
+        ref var requests = ref CollectionsMarshal.GetValueRefOrAddDefault(_pendingDatabaseRequests, databaseId, out bool exists);
+        if (!exists || requests is null)
         {
-            requests = new List<DAPRequest>();
-            PendingDatabaseRequests[databaseId] = requests;
+            requests = [];
         }
 
         if (requests.Count == 0)
         {
-            var databaseDebugInfo = DebugInfo.Databases[databaseId];
-            DatabaseContents[databaseId] = ResultManager.MakeResults(databaseDebugInfo.ParamTypes.Count);
+            var databaseDebugInfo = debugInfo.Databases[databaseId];
+            _databaseContents[databaseId] = resultManager.MakeResults(databaseDebugInfo.ParamTypes.Count);
         }
 
         requests.Add(request);
-
-        DbgClient.SendGetDatabaseContents(databaseId);
+        dbgClient.SendGetDatabaseContents(databaseId);
     }
 
     private void OnBeginDatabaseContents(BkBeginDatabaseContents msg)
     {
+        // Reserved hooks context channel frame hook
     }
 
     private void OnDatabaseRow(BkDatabaseRow msg)
     {
-        var db = DatabaseContents[msg.DatabaseId];
-        foreach (var row in msg.Row)
+        ArgumentNullException.ThrowIfNull(msg);
+
+        if (_databaseContents.TryGetValue(msg.DatabaseId, out var db) && msg.Row is { Count: > 0 })
         {
-            db.Add(row);
+            foreach (var row in msg.Row)
+            {
+                db.Add(row);
+            }
         }
     }
 
     private void OnEndDatabaseContents(BkEndDatabaseContents msg)
     {
-        var rows = DatabaseContents[msg.DatabaseId];
-        var db = DebugInfo.Databases[msg.DatabaseId];
+        ArgumentNullException.ThrowIfNull(msg);
 
-        var evalResponse = new DAPEvaluateResponse();
-        evalResponse.result = $"Database {db.Name} ({rows.Count} rows)";
-        evalResponse.namedVariables = 0;
-        evalResponse.indexedVariables = rows.Count;
-        evalResponse.variablesReference = rows.VariablesReference;
+        if (!_databaseContents.TryGetValue(msg.DatabaseId, out var rows)) return;
+        var db = debugInfo.Databases[msg.DatabaseId];
 
-        var requests = PendingDatabaseRequests[msg.DatabaseId];
-        foreach (var request in requests)
+        DAPEvaluateResponse evalResponse = new()
         {
-            DAP.SendReply(request, evalResponse);
-        }
+            Result = $"Database {db.Name} ({rows.Count} rows)",
+            NamedVariables = 0,
+            IndexedVariables = rows.Count,
+            VariablesReference = rows.VariablesReference
+        };
 
-        requests.Clear();
+        if (_pendingDatabaseRequests.Remove(msg.DatabaseId, out var requests))
+        {
+            foreach (var request in requests)
+            {
+                dap.SendReply(request, evalResponse);
+            }
+        }
     }
 }

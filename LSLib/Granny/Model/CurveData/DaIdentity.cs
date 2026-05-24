@@ -3,25 +3,20 @@ using LSLib.Granny.GR2;
 
 namespace LSLib.Granny.Model.CurveData;
 
-public class DaIdentity : AnimationCurveData
+public sealed class DaIdentity : AnimationCurveData
 {
-    [Serialization(Type = MemberType.Inline)]
-    public CurveDataHeader CurveDataHeader_DaIdentity;
-    public Int16 Dimension;
+    [field: Serialization(Type = MemberType.Inline)]
+    public CurveDataHeader CurveDataHeader_DaIdentity { get; set; } = new();
 
-    public override int NumKnots()
-    {
-        return 1;
-    }
+    public short Dimension { get; set; }
 
-    public override List<float> GetKnots()
-    {
-        return [0.0f];
-    }
+    public override int NumKnots() => 1;
+
+    public override List<float> GetKnots() => [0.0f];
 
     public override List<Vector3> GetPoints()
     {
-        return [new Vector3(0.0f, 0.0f, 0.0f)];
+        return [Vector3.Zero];
     }
 
     public override List<Matrix3> GetMatrices()

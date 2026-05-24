@@ -1,0 +1,100 @@
+<rxui:ReactiveUserControl xmlns="https://github.com/avaloniaui"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         xmlns:views="using:LSTools.DivineGUI"
+                         xmlns:rxui="clr-namespace:Avalonia.ReactiveUI;assembly=Avalonia.ReactiveUI"
+                         x:Class="LSTools.DivineGUI.ResourcePane"
+                         x:DataType="views:ResourcePane">
+
+	<Grid RowDefinitions="Auto,Auto,*,Auto,Auto" Margin="16" RowSpacing="12">
+
+		<HeaderedContentControl Grid.Row="0" Header="Convert LSX / LSB / LSF / LSJ files" Theme="{StaticResource GroupBoxTheme}">
+			<Grid RowDefinitions="Auto,Auto,Auto,Auto" ColumnDefinitions="*,Auto" Margin="12" RowSpacing="6" ColumnSpacing="8">
+				<TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Text="Input file path:" />
+
+				<TextBox Grid.Row="1" Grid.Column="0" Text="{Binding InputFilePath}" PlaceholderText="Select input resource file..." VerticalAlignment="Center">
+					<Interaction.Behaviors>
+						<EventTriggerBehavior EventName="LostFocus">
+							<InvokeCommandAction Command="{Binding ValidateInputPathCommand}" />
+						</EventTriggerBehavior>
+					</Interaction.Behaviors>
+				</TextBox>
+				<Button Grid.Row="1" Grid.Column="1" Content="..." Width="50" Command="{Binding BrowseInputFileCommand}" />
+
+				<TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Text="Output file path:" />
+				<TextBox Grid.Row="3" Grid.Column="0" Text="{Binding OutputFilePath}" PlaceholderText="Select destination file path..." VerticalAlignment="Center" />
+				<Button Grid.Row="3" Grid.Column="1" Content="..." Width="50" Command="{Binding BrowseOutputFileCommand}" />
+			</Grid>
+		</HeaderedContentControl>
+
+		<HeaderedContentControl Grid.Row="1" Header="Batch Conversion Parameters" Theme="{StaticResource GroupBoxTheme}">
+			<Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnDefinitions="*,Auto" Margin="12" RowSpacing="6" ColumnSpacing="8">
+				<TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Text="Input folder path:" />
+				<TextBox Grid.Row="1" Grid.Column="0" Text="{Binding InputDirectoryPath}" PlaceholderText="Select folder containing source files..." />
+				<Button Grid.Row="1" Grid.Column="1" Content="..." Width="50" Command="{Binding BrowseInputDirCommand}" />
+
+				<TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Text="Output folder path:" />
+				<TextBox Grid.Row="3" Grid.Column="0" Text="{Binding OutputDirectoryPath}" PlaceholderText="Select folder for converted results..." />
+				<Button Grid.Row="3" Grid.Column="1" Content="..." Width="50" Command="{Binding BrowseOutputDirCommand}" />
+
+				<Grid Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,6,0,0"
+                      ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto,Auto" ColumnSpacing="12" VerticalAlignment="Center">
+					<TextBlock Grid.Column="0" Text="Input:" VerticalAlignment="Center"/>
+					<ComboBox Grid.Column="1" Width="160" ItemsSource="{Binding AvailableFormats}" SelectedItem="{Binding SelectedInputFormat}" />
+
+					<TextBlock Grid.Column="2" Text="Output:" VerticalAlignment="Center"/>
+					<ComboBox Grid.Column="3" Width="160" ItemsSource="{Binding AvailableFormats}" SelectedItem="{Binding SelectedOutputFormat}" />
+
+					<Button Grid.Column="5" Content="Convert Single" Command="{Binding ConvertFileCommand}" Theme="{StaticResource AccentButtonTheme}" />
+					<Button Grid.Column="6" Content="Run Batch Queue" Command="{Binding BulkConvertCommand}" />
+				</Grid>
+			</Grid>
+		</HeaderedContentControl>
+
+		<DataGrid Grid.Row="2"
+                  ItemsSource="{Binding BatchFiles}"
+                  SelectedItem="{Binding SelectedBatchItem}"
+                  AutoGenerateColumns="False"
+                  IsReadOnly="True"
+                  GridLinesVisibility="All"
+                  BorderThickness="1"
+                  BorderBrush="{DynamicResource SystemControlTransientBorderBrush}"
+                  MinHeight="150"
+                  MaxHeight="400">
+			<Interaction.Behaviors>
+				<EventTriggerBehavior EventName="SelectionChanged">
+					<InvokeCommandAction Command="{Binding OnGridSelectionChangedCommand}" />
+				</EventTriggerBehavior>
+				<EventTriggerBehavior EventName="DoubleTapped">
+					<InvokeCommandAction Command="{Binding OnGridItemDoubleTappedCommand}" />
+				</EventTriggerBehavior>
+			</Interaction.Behaviors>
+
+			<DataGrid.Columns>
+				<DataGridTextColumn Header="Source File / Relative Path" Binding="{Binding SourceFile}" Width="2*" />
+				<DataGridTextColumn Header="Target Destination Output" Binding="{Binding TargetFile}" Width="2*" />
+				<DataGridTextColumn Header="Conversion Status" Binding="{Binding Status}" Width="1*" />
+			</DataGrid.Columns>
+		</DataGrid>
+
+		<HeaderedContentControl Grid.Row="3" Header="Global Engine Settings" Theme="{StaticResource GroupBoxTheme}">
+			<Grid RowDefinitions="Auto,Auto" RowSpacing="8" Margin="12">
+				<TextBlock Grid.Row="0"
+                           Text="UUID format has changed in v1.18.6! Check this to force LSX files to be read using the old (non-byteswapped) format."
+                           TextWrapping="Wrap"
+                           Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                           FontSize="12"/>
+				<CheckBox Grid.Row="1" Content="Read using old UUID format (Legacy GUIDs)" IsChecked="{Binding UseLegacyGuids}" />
+			</Grid>
+		</HeaderedContentControl>
+
+		<Grid Grid.Row="4" RowDefinitions="Auto,Auto" RowSpacing="6">
+			<Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,*,Auto">
+				<TextBlock Grid.Column="0" Text="Progress Status: " FontWeight="SemiBold"/>
+				<TextBlock Grid.Column="1" Text="{Binding ProgressText}" />
+				<TextBlock Grid.Column="3" Text="{Binding ConversionProgressPercentage, StringFormat={}{0:0}%}" />
+			</Grid>
+			<ProgressBar Grid.Row="1" Value="{Binding ConversionProgressPercentage}" Minimum="0" Maximum="100" Height="14" />
+		</Grid>
+
+	</Grid>
+</rxui:ReactiveUserControl>

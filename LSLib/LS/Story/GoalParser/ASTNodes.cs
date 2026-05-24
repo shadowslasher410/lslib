@@ -6,30 +6,35 @@ namespace LSLib.LS.Story.GoalParser;
 /// <summary>
 /// Goal node - contains everything from a goal file.
 /// </summary>
-public class ASTGoal
+public sealed class ASTGoal
 {
     // Facts in the INITSECTION part
-    public List<ASTBaseFact> InitSection;
+    public List<ASTBaseFact> InitSection { get; set; } = [];
+    
     // List of all production rules (including procs and queries) from the KBSECTION part
-    public List<ASTRule> KBSection;
-    // Ffacts in the EXITSECTION part
-    public List<ASTBaseFact> ExitSection;
+    public List<ASTRule> KBSection { get; set; } = [];
+    
+    // Facts in the EXITSECTION part
+    public List<ASTBaseFact> ExitSection { get; set; } = [];
+    
     // Names of parent goals (if any)
-    public List<ASTParentTargetEdge> ParentTargetEdges;
+    public List<ASTParentTargetEdge> ParentTargetEdges { get; set; } = [];
+    
     // Location of node in source code
-    public CodeLocation Location;
+    public CodeLocation Location { get; set; } = null!;
 }
 
 /// <summary>
 /// Name of a single parent target edge (i.e. parent goal name).
 /// This is discarded during parsing and does not appear in the final AST.
 /// </summary>
-public class ASTParentTargetEdge
+public sealed class ASTParentTargetEdge
 {
     // Location of node in source code
-    public CodeLocation Location;
+    public CodeLocation Location { get; set; } = null!;
+    
     // Parent goal name
-    public String Goal;
+    public string Goal { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -38,42 +43,47 @@ public class ASTParentTargetEdge
 public class ASTBaseFact
 {
     // Location of fact in source code
-    public CodeLocation Location;
+    public CodeLocation Location { get; set; } = null!;
 }
 
 /// <summary>
 /// Osiris fact statement from the INIT or EXIT section.
 /// </summary>
-public class ASTFact : ASTBaseFact
+public sealed class ASTFact : ASTBaseFact
 {
     // Name of database we're inserting into / deleting from
-    public String Database;
+    public string Database { get; set; } = string.Empty;
+    
     // Fact negation ("DB_Something(1)" vs. "NOT DB_Something(1)").
-    public bool Not;
+    public bool Not { get; set; }
+    
     // List of values in the fact tuple
-    public List<ASTConstantValue> Elements;
+    public List<ASTConstantValue> Elements { get; set; } = [];
 }
 
 /// <summary>
 /// Osiris GoalCompleted statement from the INIT or EXIT section.
 /// </summary>
-public class ASTGoalCompletedFact : ASTBaseFact
+public sealed class ASTGoalCompletedFact : ASTBaseFact
 {
 }
 
 /// <summary>
 /// Describes a production rule in the KB section
 /// </summary>
-public class ASTRule
+public sealed class ASTRule
 {
     // Location of rule in source code
-    public CodeLocation Location;
+    public CodeLocation Location { get; set; } = null!;
+    
     // Type of rule (if, proc or query)
-    public RuleType Type;
+    public RuleType Type { get; set; }
+    
     // Conditions/predicates
-    public List<ASTCondition> Conditions;
+    public List<ASTCondition> Conditions { get; set; } = [];
+    
     // Actions to execute on tuples that satisfy the conditions
-    public List<ASTAction> Actions;
+    public List<ASTAction> Actions { get; set; } = [];
 }
 
 /// <summary>
@@ -82,45 +92,47 @@ public class ASTRule
 public class ASTCondition
 {
     // Location of condition in source code
-    public CodeLocation Location;
+    public CodeLocation Location { get; set; } = null!;
 }
 
 /// <summary>
 /// "Function call-like" predicate - a div query, a user query or a database filter.
 /// (i.e. "AND SomeFunc(1, 2)" or "AND NOT SomeFunc(1, 2)")
 /// </summary>
-public class ASTFuncCondition : ASTCondition
+public sealed class ASTFuncCondition : ASTCondition
 {
     // Query/Database name
-    // (We don't know yet whether this is a query or a database - this info will only be
-    //  available during phase2 parsing)
-    public String Name;
+    public string Name { get; set; } = string.Empty;
+    
     // Condition negation ("AND DB_Something(1)" vs. "AND NOT DB_Something(1)").
-    public bool Not;
+    public bool Not { get; set; }
+    
     // List of query parameters / database tuple columns
-    public List<ASTRValue> Params;
+    public List<ASTRValue> Params { get; set; } = [];
 }
 
 /// <summary>
 /// Predicate with a binary operator (i.e. "A >= B", "A == B", ...)
 /// </summary>
-public class ASTBinaryCondition : ASTCondition
+public sealed class ASTBinaryCondition : ASTCondition
 {
     // Left-hand value
-    public ASTRValue LValue;
+    public ASTRValue LValue { get; set; } = null!;
+    
     // Operator
-    public RelOpType Op;
+    public RelOpType Op { get; set; }
+    
     // Right-hand value
-    public ASTRValue RValue;
+    public ASTRValue RValue { get; set; } = null!;
 }
 
 public class ASTAction
 {
     // Location of action in source code
-    public CodeLocation Location;
+    public CodeLocation Location { get; set; } = null!;
 }
 
-public class ASTGoalCompletedAction : ASTAction
+public sealed class ASTGoalCompletedAction : ASTAction
 {
 }
 
@@ -128,55 +140,56 @@ public class ASTGoalCompletedAction : ASTAction
 /// Statement in the THEN part of a rule.
 /// This is either a builtin PROC call, user PROC call, or a database insert/delete operation.
 /// </summary>
-public class ASTStatement : ASTAction
+public sealed class ASTStatement : ASTAction
 {
     // Proc/Database name
-    // (We don't know yet whether this is a PROC or a DB - this info will only be
-    //  available during phase2 parsing)
-    public String Name;
+    public string Name { get; set; } = string.Empty;
+    
     // Statement negation ("DB_Something(1)" vs. "NOT DB_Something(1)").
-    public bool Not;
+    public bool Not { get; set; }
+    
     // List of PROC parameters / database tuple columns
-    public List<ASTRValue> Params;
+    public List<ASTRValue> Params { get; set; } = [];
 }
 
 public class ASTRValue
 {
     // Location of node in source code
-    public CodeLocation Location;
+    public CodeLocation Location { get; set; } = null!;
 }
 
 /// <summary>
 /// Constant scalar value.
 /// </summary>
-public class ASTConstantValue : ASTRValue
+public sealed class ASTConstantValue : ASTRValue
 {
     // Type of value, if specified in the code.
     // (e.g. "(INT64)123")
-    public String TypeName;
+    public string? TypeName { get; set; }
+    
     // Internal type of the constant
-    // This is not the same as the Osiris type; e.g. a value of type CHARACTERGUID
-    // will be stored with a constant type of "Name". It also doesn't differentiate
-    // between INT and INT64 as we don't know the exact Osiris type without contextual
-    // type inference, which will happen in later stages.
-    public IRConstantType Type;
+    public IRConstantType Type { get; set; }
+    
     // Value of this constant if the type is Integer.
-    public Int64 IntegerValue;
+    public long IntegerValue { get; set; }
+    
     // Value of this constant if the type is Float.
-    public Single FloatValue;
+    public float FloatValue { get; set; }
+    
     // Value of this constant if the type is String or Name.
-    public String StringValue;
+    public string StringValue { get; set; } = string.Empty;
 }
 
 /// <summary>
 /// Rule-local variable name.
 /// (Any variable that begins with an underscore in the IF or THEN part of a rule)
 /// </summary>
-public class ASTLocalVar : ASTRValue
+public sealed class ASTLocalVar : ASTRValue
 {
     // Type of variable, if specified in the code.
     // (e.g. "(ITEMGUID)_Var")
-    public String Type;
+    public string? Type { get; set; }
+    
     // Name of variable.
-    public String Name;
+    public string Name { get; set; } = string.Empty;
 }

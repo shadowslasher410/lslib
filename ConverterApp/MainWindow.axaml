@@ -1,0 +1,63 @@
+<rxui:ReactiveWindow xmlns="https://github.com/avaloniaui"
+                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                     xmlns:views="using:LSTools.DivineGUI"
+                     xmlns:i="clr-namespace:Avalonia.Xaml.Interactivity;assembly=Xaml.Behaviors.Avalonia"
+                     xmlns:ia="clr-namespace:Avalonia.Xaml.Interactions.Core;assembly=Xaml.Behaviors.Avalonia"
+                     xmlns:rxui="clr-namespace:Avalonia.ReactiveUI;assembly=Avalonia.ReactiveUI"
+                     x:Class="LSTools.DivineGUI.MainWindow"
+                     x:DataType="views:MainWindow"
+                     Title="{Binding AppTitle}"
+                     MinWidth="1024" MinHeight="600"
+                     Width="1255" Height="826"
+                     WindowStartupLocation="CenterScreen">
+
+	<Grid RowDefinitions="Auto,*,Auto" Margin="16" RowSpacing="12">
+
+		<Grid Grid.Row="0" ColumnDefinitions="Auto,*" ColumnSpacing="12" VerticalAlignment="Center">
+			<TextBlock Grid.Column="0" Text="Game:" VerticalAlignment="Center" FontWeight="SemiBold" />
+			<ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding DynamicGameOptions}"
+                      SelectedIndex="{Binding Settings.SelectedGame}"/>
+		</Grid>
+
+		<TabControl Grid.Row="1" Name="mainTabControl">
+			<TabItem Header="GR2 Tools">
+				<views:GR2Pane Name="gr2PaneControl" />
+			</TabItem>
+
+			<TabItem Header="PAK / LSV Tools">
+				<views:PackagePane Name="packagePaneControl" />
+			</TabItem>
+
+			<TabItem Header="LSX / LSB / LSF / LSJ Tools">
+				<views:ResourcePane Name="resourcePaneControl" />
+			</TabItem>
+
+			<TabItem Header="Virtual Textures">
+				<views:VirtualTexturesPane Name="virtualTexturesPaneControl" />
+			</TabItem>
+
+			<TabItem Header="Localization">
+				<views:LocalizationPane Name="locaPaneControl" />
+			</TabItem>
+
+			<TabItem Header="Story (OSI) tools">
+				<views:OsirisPane Name="osirisPaneControl" />
+			</TabItem>
+
+			<TabItem Header="Savegame Debugging">
+				<views:DebugPane Name="debugPaneControl" />
+			</TabItem>
+		</TabControl>
+
+		<Border Grid.Row="2" Background="{DynamicResource SystemControlTransientBackgroundBrush}"
+                Padding="12,8" CornerRadius="4"
+                IsVisible="{Binding GlobalAlertLog, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+			<Grid ColumnDefinitions="Auto,*">
+				<TextBlock Grid.Column="0" Text="Status: " Foreground="Red" FontWeight="SemiBold" VerticalAlignment="Center" />
+				<TextBlock Grid.Column="1" Text="{Binding GlobalAlertLog}" TextWrapping="Wrap" VerticalAlignment="Center" />
+			</Grid>
+		</Border>
+
+	</Grid>
+</rxui:ReactiveWindow>

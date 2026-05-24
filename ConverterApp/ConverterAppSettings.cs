@@ -1,412 +1,166 @@
-﻿using LSLib.Granny.Model;
-using LSLib.LS;
+﻿using LSLib.LS;
 using LSLib.LS.Enums;
-using System;
-using System.Collections.Generic;
+using ReactiveUI;
 using System.ComponentModel;
-using System.Globalization;
-using System.Linq;
-using System.Runtime.CompilerServices;
-using System.Text;
-using System.Threading.Tasks;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
-namespace ConverterApp;
+namespace LSTools.DivineGUI;
 
 public interface ISettingsDataSource
 {
     ConverterAppSettings Settings { get; set; }
 }
 
-public class SettingsBase : INotifyPropertyChanged
+public interface IGameSettingsTarget
 {
-    public event PropertyChangedEventHandler PropertyChanged;
-
-    protected virtual void OnPropertyChanged([CallerMemberName] string propertyName = null)
-    {
-        var handler = PropertyChanged;
-        if (handler != null) handler(this, new PropertyChangedEventArgs(propertyName));
-    }
+    void SetGame(Game game);
 }
 
-public class ConverterAppSettings : SettingsBase
+public class ConverterAppSettings : ReactiveObject
 {
-    private GR2PaneSettings gr2;
-
-    public GR2PaneSettings GR2
-    {
-        get { return gr2; }
-        set { gr2 = value; }
-    }
-
-    private PackagePaneSettings pakSettings;
-
-    public PackagePaneSettings PAK
-    {
-        get { return pakSettings; }
-        set { pakSettings = value; }
-    }
-
-    private ResourcePaneSettings resourceSettings;
-
-    public ResourcePaneSettings Resources
-    {
-        get { return resourceSettings; }
-        set { resourceSettings = value; }
-    }
-
-    private VirtualTexturesPaneSettings virtualTextureSettings;
-    public VirtualTexturesPaneSettings VirtualTextures
-    {
-        get { return virtualTextureSettings; }
-        set { virtualTextureSettings = value; }
-    }
-
-    private OsirisPaneSettings storySettings;
-
-    public OsirisPaneSettings Story
-    {
-        get { return storySettings; }
-        set { storySettings = value; }
-    }
-
-    private DebugPaneSettings debugSettings;
-
-    public DebugPaneSettings Debugging
-    {
-        get { return debugSettings; }
-        set { debugSettings = value; }
-    }
-
-    private Game selectedGame = Game.BaldursGate3;
+    public GR2PaneSettings GR2 { get; init; } = new();
+    public PackagePaneSettings PAK { get; init; } = new();
+    public ResourcePaneSettings Resources { get; init; } = new();
+    public VirtualTexturesPaneSettings VirtualTextures { get; init; } = new();
+    public OsirisPaneSettings Story { get; init; } = new();
+    public DebugPaneSettings Debugging { get; init; } = new();
 
     public int SelectedGame
     {
-        get { return (int)selectedGame; }
-        set { selectedGame = (Game)value; OnPropertyChanged(); }
-    }
+        get;
+        set => this.RaiseAndSetIfChanged(ref field, value);
+    } = 4; // Defaults to index 4 (Baldur's Gate 3)
 
-    private string version = "";
-
-    public string Version
-    {
-        get { return version; }
-        set { version = value; }
-    }
+    public string Version { get; set => this.RaiseAndSetIfChanged(ref field, value); } = string.Empty;
 
     public void SetPropertyChangedEvent(PropertyChangedEventHandler eventHandler)
     {
-        this.PropertyChanged += eventHandler;
+        PropertyChanged += eventHandler;
         GR2.PropertyChanged += eventHandler;
         PAK.PropertyChanged += eventHandler;
         Resources.PropertyChanged += eventHandler;
+        VirtualTextures.PropertyChanged += eventHandler;
         Story.PropertyChanged += eventHandler;
-    }
-
-    public ConverterAppSettings()
-    {
-        GR2 = new GR2PaneSettings();
-        PAK = new PackagePaneSettings();
-        Resources = new ResourcePaneSettings();
-        VirtualTextures = new VirtualTexturesPaneSettings();
-        Story = new OsirisPaneSettings();
-        Debugging = new DebugPaneSettings();
+        Debugging.PropertyChanged += eventHandler;
     }
 }
 
-public class GR2PaneSettings : SettingsBase
+public class GR2PaneSettings : ReactiveObject
 {
-    private string inputPath = "";
+    public string InputPath { get; set => this.RaiseAndSetIfChanged(ref field, value); } = string.Empty;
+    public string OutputPath { get; set => this.RaiseAndSetIfChanged(ref field, value); } = string.Empty;
+    public string BatchInputPath { get; set => this.RaiseAndSetIfChanged(ref field, value); } = string.Empty;
+    public string BatchOutputPath { get; set => this.RaiseAndSetIfChanged(ref field, value); } = string.Empty;
 
-    public string InputPath
+    public LSLib.Granny.ExportFormat BatchInputFormat
     {
-        get { return inputPath; }
-        set { inputPath = value; OnPropertyChanged(); }
-    }
+        get;
+        set => this.RaiseAndSetIfChanged(ref field, value);
+    } = LSLib.Granny.ExportFormat.GR2;
 
-    private string outputPath = "";
-
-    public string OutputPath
+    public LSLib.Granny.ExportFormat BatchOutputFormat
     {
-        get { return outputPath; }
-        set { outputPath = value; OnPropertyChanged(); }
-    }
+        get;
+        set => this.RaiseAndSetIfChanged(ref field, value);
+    } = LSLib.Granny.ExportFormat.DAE;
 
-    private string batchInputPath = "";
-
-    public string BatchInputPath
-    {
-        get { return batchInputPath; }
-        set { batchInputPath = value; OnPropertyChanged(); }
-    }
-
-    private string batchOutputPath = "";
-
-    public string BatchOutputPath
-    {
-        get { return batchOutputPath; }
-        set { batchOutputPath = value; OnPropertyChanged(); }
-    }
-
-    private ExportFormat batchInputFormat = ExportFormat.GR2;
-
-    public int BatchInputFormat
-    {
-        get { return (int)batchInputFormat; }
-        set { batchInputFormat = (ExportFormat)value; OnPropertyChanged(); }
-    }
-
-    private ExportFormat batchOutputFormat = ExportFormat.DAE;
-
-    public int BatchOutputFormat
-    {
-        get { return (int)batchOutputFormat; }
-        set { batchOutputFormat = (ExportFormat)value; OnPropertyChanged(); }
-    }
-
-    private string conformPath;
-
-    public string ConformPath
-    {
-        get { return conformPath; }
-        set { conformPath = value; OnPropertyChanged(); }
-    }
-
+    public string ConformPath { get; set => this.RaiseAndSetIfChanged(ref field, value); } = string.Empty;
 }
 
-public class PackagePaneSettings : SettingsBase
+public class PackagePaneSettings : ReactiveObject
 {
-    private string extractInputPath = "";
+    public string ExtractInputPath { get; set => this.RaiseAndSetIfChanged(ref field, value); } = string.Empty;
+    public string ExtractOutputPath { get; set => this.RaiseAndSetIfChanged(ref field, value); } = string.Empty;
+    public string CreateInputPath { get; set => this.RaiseAndSetIfChanged(ref field, value); } = string.Empty;
+    public string CreateOutputPath { get; set => this.RaiseAndSetIfChanged(ref field, value); } = string.Empty;
 
-    public string ExtractInputPath
-    {
-        get { return extractInputPath; }
-        set { extractInputPath = value; OnPropertyChanged(); }
-    }
+    [JsonConverter(typeof(PackageVersionJsonConverter))]
+    public LSLib.LS.PackageVersion CreatePackageVersion { get; set => this.RaiseAndSetIfChanged(ref field, value); }
 
-    private string extractOutputPath = "";
-
-    public string ExtractOutputPath
-    {
-        get { return extractOutputPath; }
-        set { extractOutputPath = value; OnPropertyChanged(); }
-    }
-
-    private string createInputPath = "";
-
-    public string CreateInputPath
-    {
-        get { return createInputPath; }
-        set { createInputPath = value; OnPropertyChanged(); }
-    }
-
-    private string createOutputPath = "";
-
-    public string CreateOutputPath
-    {
-        get { return createOutputPath; }
-        set { createOutputPath = value; OnPropertyChanged(); }
-    }
-
-    private int createPackageVersion = 0;
-
-    public int CreatePackageVersion
-    {
-        get { return createPackageVersion; }
-        set { createPackageVersion = value; OnPropertyChanged(); }
-    }
-
-    private int createPackageCompression = 3;
-
-    public int CreatePackageCompression
-    {
-        get { return createPackageCompression; }
-        set { createPackageCompression = value; OnPropertyChanged(); }
-    }
-
-    //public string BatchInputPath { get; set; } = "";
-    //public string BatchOutputPath { get; set; } = "";
+    [JsonConverter(typeof(CompressionMethodJsonConverter))]
+    public CompressionMethod CreatePackageCompression { get; set => this.RaiseAndSetIfChanged(ref field, value); } = CompressionMethod.LZ4;
 }
 
-public class ResourcePaneSettings : SettingsBase
+public class ResourcePaneSettings : ReactiveObject
 {
-    private string inputPath = "";
-
-    public string InputPath
-    {
-        get { return inputPath; }
-        set { inputPath = value; OnPropertyChanged(); }
-    }
-
-    private string outputPath = "";
-
-    public string OutputPath
-    {
-        get { return outputPath; }
-        set { outputPath = value; OnPropertyChanged(); }
-    }
-
-    private string batchInputPath = "";
-
-    public string BatchInputPath
-    {
-        get { return batchInputPath; }
-        set { batchInputPath = value; OnPropertyChanged(); }
-    }
-
-    private string batchOutputPath = "";
-
-    public string BatchOutputPath
-    {
-        get { return batchOutputPath; }
-        set { batchOutputPath = value; OnPropertyChanged(); }
-    }
-
-    private int batchInputFormat;
-
-    public int BatchInputFormat
-    {
-        get { return batchInputFormat; }
-        set { batchInputFormat = value; OnPropertyChanged(); }
-    }
-
-    private int batchOutputFormat;
-
-    public int BatchOutputFormat
-    {
-        get { return batchOutputFormat; }
-        set { batchOutputFormat = value; OnPropertyChanged(); }
-    }
+    public string InputPath { get; set => this.RaiseAndSetIfChanged(ref field, value); } = string.Empty;
+    public string OutputPath { get; set => this.RaiseAndSetIfChanged(ref field, value); } = string.Empty;
+    public string BatchInputPath { get; set => this.RaiseAndSetIfChanged(ref field, value); } = string.Empty;
+    public string BatchOutputPath { get; set => this.RaiseAndSetIfChanged(ref field, value); } = string.Empty;
+    public LSLib.Granny.ExportFormat BatchInputFormat { get; set => this.RaiseAndSetIfChanged(ref field, value); }
+    public LSLib.Granny.ExportFormat BatchOutputFormat { get; set => this.RaiseAndSetIfChanged(ref field, value); }
 }
 
-public class VirtualTexturesPaneSettings : SettingsBase
+public class VirtualTexturesPaneSettings : ReactiveObject
 {
-    private string gtsPath = "";
-
-    public string GTSPath
-    {
-        get { return gtsPath; }
-        set { gtsPath = value; OnPropertyChanged(); }
-    }
-
-    private string destinationPath = "";
-
-    public string DestinationPath
-    {
-        get { return destinationPath; }
-        set { destinationPath = value; OnPropertyChanged(); }
-    }
+    public string GTSPath { get; set => this.RaiseAndSetIfChanged(ref field, value); } = string.Empty;
+    public string DestinationPath { get; set => this.RaiseAndSetIfChanged(ref field, value); } = string.Empty;
 }
 
-public class OsirisPaneSettings : SettingsBase
+public class OsirisPaneSettings : ReactiveObject
 {
-    private string inputPath = "";
-
-    public string InputPath
-    {
-        get { return inputPath; }
-        set { inputPath = value; OnPropertyChanged(); }
-    }
-
-    private string outputPath = "";
-
-    public string OutputPath
-    {
-        get { return outputPath; }
-        set { outputPath = value; OnPropertyChanged(); }
-    }
-
-    private string filterText = "";
-
-    public string FilterText
-    {
-        get { return filterText; }
-        set { filterText = value; OnPropertyChanged(); }
-    }
-
-    private bool filterMatchCase = false;
-
-    public bool FilterMatchCase
-    {
-        get { return filterMatchCase; }
-        set { filterMatchCase = value; OnPropertyChanged(); }
-    }
+    public string InputPath { get; set => this.RaiseAndSetIfChanged(ref field, value); } = string.Empty;
+    public string OutputPath { get; set => this.RaiseAndSetIfChanged(ref field, value); } = string.Empty;
+    public string FilterText { get; set => this.RaiseAndSetIfChanged(ref field, value); } = string.Empty;
+    public bool FilterMatchCase { get; set => this.RaiseAndSetIfChanged(ref field, value); }
 }
 
-public class DebugPaneSettings : SettingsBase
+public class DebugPaneSettings : ReactiveObject
 {
-    private string savePath = "";
-
-    public string SavePath
-    {
-        get { return savePath; }
-        set { savePath = value; OnPropertyChanged(); }
-    }
+    public string SavePath { get; set => this.RaiseAndSetIfChanged(ref field, value); } = string.Empty;
 }
 
-sealed class PackageVersionConverter : TypeConverter
+public sealed class PackageVersionJsonConverter : JsonConverter<LSLib.LS.PackageVersion>
 {
-    public override bool CanConvertTo(ITypeDescriptorContext context, Type destinationType)
+    public override LSLib.LS.PackageVersion Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        return true;
-    }
-
-    public override object ConvertTo(ITypeDescriptorContext context, System.Globalization.CultureInfo culture, object value, Type destinationType)
-    {
-        if(value is PackageVersion version)
+        int index = reader.GetInt32();
+        return index switch
         {
-            switch (version)
-            {
-                case PackageVersion.V10:
-                    {
-                        return 2;
-                    }
-                case PackageVersion.V9:
-                    {
-                        return 3;
-                    }
-                case PackageVersion.V7:
-                    {
-                        return 4;
-                    }
-                case PackageVersion.V13:
-                default:
-                    {
-                        return 0;
-                    }
-            }
-        }
-        return 0;
+            2 => LSLib.LS.PackageVersion.V10,
+            3 => LSLib.LS.PackageVersion.V9,
+            4 => LSLib.LS.PackageVersion.V7,
+            _ => LSLib.LS.PackageVersion.V18
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, LSLib.LS.PackageVersion value, JsonSerializerOptions options)
+    {
+        int outIndex = value switch
+        {
+            LSLib.LS.PackageVersion.V10 => 2,
+            LSLib.LS.PackageVersion.V9 => 3,
+            LSLib.LS.PackageVersion.V7 => 4,
+            _ => 0
+        };
+        writer.WriteNumberValue(outIndex);
     }
 }
 
-sealed class CompressionConverter : TypeConverter
+public sealed class CompressionMethodJsonConverter : JsonConverter<CompressionMethod>
 {
-    public override bool CanConvertTo(ITypeDescriptorContext context, Type destinationType)
+    public override CompressionMethod Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        return true;
+        int index = reader.GetInt32();
+        return index switch
+        {
+            0 => CompressionMethod.None,
+            1 => CompressionMethod.Zlib,
+            3 => CompressionMethod.LZ4,
+            _ => CompressionMethod.LZ4
+        };
     }
 
-    public override object ConvertTo(ITypeDescriptorContext context, System.Globalization.CultureInfo culture, object value, Type destinationType)
+    public override void Write(Utf8JsonWriter writer, CompressionMethod value, JsonSerializerOptions options)
     {
-        if (value is CompressionMethod compression)
+        int outIndex = value switch
         {
-            switch (compression)
-            {
-                case CompressionMethod.Zlib:
-                    {
-                        return 1;
-                    }
-                case CompressionMethod.None:
-                    {
-                        return 0;
-                    }
-                case CompressionMethod.LZ4:
-                default:
-                    {
-                        return 3;
-                    }
-            }
-        }
-        return 0;
+            CompressionMethod.None => 0,
+            CompressionMethod.Zlib => 1,
+            CompressionMethod.LZ4 => 3,
+            _ => 3
+        };
+        writer.WriteNumberValue(outIndex);
     }
 }

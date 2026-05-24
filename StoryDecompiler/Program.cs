@@ -1,152 +1,189 @@
 ﻿using LSLib.LS.Story;
-using System;
-using System.IO;
-using CommandLineParser.Exceptions;
 using LSLib.LS;
-using System.Linq;
-using System.Collections.Generic;
+using System.CommandLine;
+using StoryDecompiler;
+using LSLib.LS.Resources.LSF;
 
-namespace LSTools.StoryDecompiler;
-
-class Program
+var inputOption = new Option<string>("--input", "-i")
 {
-    private static MemoryStream LoadStoryStreamFromSave(String path)
+    Description = "Compiled story/savegame file path (.osi or .lsv)",
+    Required = true
+};
+
+var outputOption = new Option<string>("--output", "-o")
+{
+    Description = "Goal destination output directory path",
+    Required = true
+};
+
+var debugLogOption = new Option<string>("--debug-log", "-d")
+{
+    Description = "Generate comprehensive story debug log file",
+    Arity = ArgumentArity.ExactlyOne,
+    DefaultValueFactory = _ => "info",
+};
+debugLogOption.AcceptOnlyFromAmong("off", "fatal", "error", "warn", "info", "debug", "trace", "all");
+
+var rootCommand = new RootCommand("Osiris Story Decompiler Framework")
+{
+    inputOption,
+    outputOption,
+    debugLogOption
+};
+
+rootCommand.SetAction(async (parseResult, cancellationToken) =>
+{
+    string inputPath = parseResult.GetValue(inputOption)!;
+    string outputPath = parseResult.GetValue(outputOption)!;
+    string debugLog = parseResult.GetValue(debugLogOption)!;
+
+    var settings = new DecompilerContext
     {
-        var reader = new PackageReader();
-        using (var package = reader.Read(path))
-        {
-            var globalsFile = package.Files.FirstOrDefault(p => p.Name.ToLowerInvariant() == "globals.lsf");
-            if (globalsFile == null)
-            {
-                throw new Exception("Could not find globals.lsf in savegame archive.");
-            }
+        DebugEnabled = !string.Equals(debugLog, "off", StringComparison.OrdinalIgnoreCase)
+    };
 
-            Resource resource;
-            using (var rsrcStream = globalsFile.CreateContentReader())
-            using (var rsrcReader = new LSFReader(rsrcStream))
-            {
-                resource = rsrcReader.Read();
-            }
-
-            LSLib.LS.Node storyNode = resource.Regions["Story"].Children["Story"][0];
-            var storyBlob = storyNode.Attributes["Story"].Value as byte[];
-            var storyStream = new MemoryStream(storyBlob);
-            return storyStream;
-        }
+    if (!File.Exists(inputPath))
+    {
+        WriteErrorLine($"Source input file context does not exist: {inputPath}");
+        return 1;
     }
 
-    private static Stream LoadStoryStreamFromFile(String path)
+    try
     {
-        return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-    }
+        Console.WriteLine($"Initializing Decompiler Pipeline...");
+        Console.WriteLine($"Target Input: {inputPath}");
+        Console.WriteLine($"Target Output: {outputPath}");
+        Console.WriteLine($"Debug Logging Status: {settings.DebugEnabled}");
 
-    private static Story LoadStory(String path)
-    {
-        string extension = Path.GetExtension(path).ToLower();
+        // Yield to the thread loop to keep execution non-blocking 
+        await Task.Yield();
+        cancellationToken.ThrowIfCancellationRequested();
 
-        Stream storyStream;
-        switch (extension)
+        Console.WriteLine($"Loading story from {inputPath} ...");
+        var story = LoadStory(inputPath);
+
+        Directory.CreateDirectory(outputPath);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (settings.DebugEnabled)
         {
-            case ".lsv":
-                storyStream = LoadStoryStreamFromSave(path);
-                break;
-
-            case ".osi":
-                storyStream = LoadStoryStreamFromFile(path);
-                break;
-
-            default:
-                throw new Exception($"Unsupported story/save extension: {extension}");
-        }
-
-        using (storyStream)
-        {
-            var reader = new StoryReader();
-            return reader.Read(storyStream);
-        }
-    }
-
-    private static void DebugDumpStory(Story story, String debugLogPath)
-    {
-        using (var debugFile = new FileStream(debugLogPath, FileMode.Create, FileAccess.Write))
-        {
-            using (var writer = new StreamWriter(debugFile))
-            {
-                story.DebugDump(writer);
-            }
-        }
-    }
-
-    private static void DecompileStoryGoals(Story story, String outputDir)
-    {
-        foreach (KeyValuePair<uint, Goal> goal in story.Goals)
-        {
-            string filePath = Path.Combine(outputDir, $"{goal.Value.Name}.txt");
-            using (var goalFile = new FileStream(filePath, FileMode.Create, FileAccess.Write))
-            {
-                using (var writer = new StreamWriter(goalFile))
-                {
-                    goal.Value.MakeScript(writer, story);
-                }
-            }
-        }
-    }
-
-    private static void Run(CommandLineArguments args)
-    {
-        Console.WriteLine($"Loading story from {args.InputPath} ...");
-        var story = LoadStory(args.InputPath);
-
-        if (args.DebugLog)
-        {
-            Console.WriteLine($"Exporting debug log ...");
-            string debugLogPath = Path.Combine(args.OutputPath, "debug.log");
+            Console.WriteLine("Exporting debug log ...");
+            string debugLogPath = Path.Combine(outputPath, "debug.log");
             DebugDumpStory(story, debugLogPath);
         }
 
-        Console.WriteLine($"Exporting goals ...");
-        DecompileStoryGoals(story, args.OutputPath);
+        Console.WriteLine("Exporting goals ...");
+        DecompileStoryGoals(story, outputPath);
+
+        Console.WriteLine("Decompilation processed successfully.");
+        return 0;
+    }
+    catch (OperationCanceledException)
+    {
+        WriteErrorLine("Decompilation pipeline execution was aborted by user cancellation signal.");
+        return 130; // Standard SIGINT exit payload 
+    }
+    catch (Exception ex)
+    {
+        WriteErrorLine($"Decompilation pipeline failed: {ex.Message}");
+        return 1;
+    }
+});
+
+// Modern asynchronous console entry pipeline hook matching .NET 10 standards
+return await rootCommand.Parse(args).InvokeAsync();
+
+static Stream LoadStoryStreamFromSave(string path)
+{
+    var reader = new PackageReader();
+    using var package = reader.Read(path);
+
+    var globalsFile = package.Files.FirstOrDefault(p =>
+        string.Equals(p.Name, "globals.lsf", StringComparison.OrdinalIgnoreCase)) ?? throw new FileNotFoundException("Could not find globals.lsf in savegame archive target package.");
+    Resource resource;
+    using (var rsrcStream = globalsFile.CreateContentReader())
+    using (var rsrcReader = new LSFReader(rsrcStream))
+    {
+        resource = rsrcReader.Read();
     }
 
-    static void Main(string[] args)
+    var storyChildren = resource.Regions["Story"].Children["Story"];
+    if (storyChildren.Count == 0)
     {
-        if (args.Length == 0)
-        {
-            Console.WriteLine("Usage: StoryDecompiler <args>");
-            Console.WriteLine("    --input <path>   - Compiled story/savegame file path");
-            Console.WriteLine("    --output <path>  - Goal output directory");
-            Console.WriteLine("    --debug-log      - Generate story debug log");
-            Environment.Exit(1);
-        }
+        throw new InvalidDataException("Missing inner Story collection descriptor within resource metadata.");
+    }
 
-        CommandLineParser.CommandLineParser parser = new CommandLineParser.CommandLineParser();
+    LSLib.LS.Node storyNode = storyChildren[0];
 
-        var argv = new CommandLineArguments();
+    if (storyNode.Attributes["Story"].Value is not byte[] storyBlob)
+    {
+        throw new InvalidDataException("Story node target format metadata payload is corrupt or invalid.");
+    }
 
-        parser.ExtractArgumentAttributes(argv);
+    return new MemoryStream(storyBlob);
+}
 
-        try
-        {
-            parser.ParseCommandLine(args);
-        }
-        catch (CommandLineArgumentException e)
-        {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"Argument --{e.Argument}: {e.Message}");
-            Console.ResetColor();
-            Environment.Exit(1);
-        }
-        catch (CommandLineException e)
-        {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine(e.Message);
-            Console.ResetColor();
-            Environment.Exit(1);
-        }
+static Stream LoadStoryStreamFromFile(string path)
+{
+    return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+}
 
-        if (parser.ParsingSucceeded)
+static Story LoadStory(string path)
+{
+    string extension = Path.GetExtension(path);
+
+    Stream storyStream = extension.Equals(".lsv", StringComparison.OrdinalIgnoreCase)
+        ? LoadStoryStreamFromSave(path)
+        : extension.Equals(".osi", StringComparison.OrdinalIgnoreCase)
+            ? LoadStoryStreamFromFile(path)
+            : throw new NotSupportedException($"Unsupported target story/save filename extension: {extension}");
+
+    using (storyStream)
+    {
+        return StoryReader.Read(storyStream);
+    }
+}
+
+static void DebugDumpStory(Story story, string debugLogPath)
+{
+    using var debugFile = new FileStream(debugLogPath, FileMode.Create, FileAccess.Write);
+    using var writer = new StreamWriter(debugFile);
+    story.DebugDump(writer);
+}
+
+static void DecompileStoryGoals(Story story, string outputDir)
+{
+    foreach (var (_, goal) in story.Goals)
+    {
+        string filePath = Path.Combine(outputDir, $"{goal.Name}.txt");
+        using var goalFile = new FileStream(filePath, FileMode.Create, FileAccess.Write);
+        using var writer = new StreamWriter(goalFile);
+        goal.MakeScript(writer, story);
+    }
+}
+
+static void WriteErrorLine(string message)
+{
+    var originalColor = Console.ForegroundColor;
+    try
+    {
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.Error.WriteLine(message);
+    }
+    finally
+    {
+        Console.ForegroundColor = originalColor;
+    }
+}
+
+namespace StoryDecompiler
+{
+    public class DecompilerContext
+    {
+        public bool DebugEnabled
         {
-            Run(argv);
+            get;
+            set;
         }
     }
 }

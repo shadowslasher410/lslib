@@ -1,121 +1,120 @@
-﻿using LSLib.LS.Story.Compiler;
-using QUT.Gppg;
-using System;
+﻿using LSLib.DebuggerFrontend.ExpressionParser;
+using LSLib.LS.Story.Compiler;
+using Superpower;
 using System.Globalization;
-using System.IO;
 using System.Text.RegularExpressions;
 
-namespace LSLib.DebuggerFrontend.ExpressionParser;
+namespace LSTools.DebuggerFrontend.ExpressionParser;
 
-internal class ParserConstants
+internal static class ParserConstants
 {
-    public static CultureInfo ParserCulture = new CultureInfo("en-US");
+    public static readonly CultureInfo ParserCulture = CultureInfo.ReadOnly(new CultureInfo("en-US"));
 }
 
-public abstract class ExpressionScanBase : AbstractScanner<ExpressionNode, LexLocation>
+public class ExpressionParser(string expression)
 {
-    protected virtual bool yywrap() { return true; }
+    private readonly string _expression = expression ?? string.Empty;
 
-    protected Literal MakeLiteral(string lit) => new Literal()
+    private Statement? CurrentSemanticValue { get; set; }
+
+    public bool Parse()
     {
-        Lit = lit
-    };
+        if (string.IsNullOrWhiteSpace(_expression)) return false;
 
-    protected Literal MakeString(string lit)
-    {
-        return MakeLiteral(Regex.Unescape(lit.Substring(1, lit.Length - 2)));
-    }
-}
-
-public sealed partial class ExpressionScanner : ExpressionScanBase
-{
-}
-
-public partial class ExpressionParser
-{
-    public ExpressionParser(ExpressionScanner scnr) : base(scnr)
-    {
-    }
-
-    public Statement GetStatement()
-    {
-        return CurrentSemanticValue as Statement;
-    }
-
-    private Statement MakeStatement(ExpressionNode name, ExpressionNode paramList, bool not) => new Statement
-    {
-        Name = (name as Literal).Lit,
-        Not = not,
-        Params = (paramList as StatementParamList).Params
-    };
-
-    private Statement MakeStatement(ExpressionNode name, bool not) => new Statement
-    {
-        Name = (name as Literal).Lit,
-        Not = not
-    };
-
-    private StatementParamList MakeParamList() => new StatementParamList();
-
-    private StatementParamList MakeParamList(ExpressionNode param)
-    {
-        var list = new StatementParamList();
-        list.Params.Add(param as RValue);
-        return list;
-    }
-
-    private StatementParamList MakeParamList(ExpressionNode list, ExpressionNode param)
-    {
-        var actionParamList = list as StatementParamList;
-        actionParamList.Params.Add(param as RValue);
-        return actionParamList;
-    }
-
-    private LocalVar MakeLocalVar(ExpressionNode varName) => new LocalVar()
-    {
-        Name = (varName as Literal).Lit
-    };
-
-    private LocalVar MakeLocalVar(ExpressionNode typeName, ExpressionNode varName) => new LocalVar()
-    {
-        Type = (typeName as Literal).Lit,
-        Name = (varName as Literal).Lit
-    };
-
-    private ConstantValue MakeTypedConstant(ExpressionNode typeName, ExpressionNode constant)
-    {
-        var c = constant as ConstantValue;
-        return new ConstantValue()
+        try
         {
-            TypeName = (typeName as Literal).Lit,
+            var tokens = ExpressionTokenizer.Instance.Tokenize(_expression);
+            var result = ExpressionParserCombinators.Expression.TryParse(tokens);
+
+            if (result.HasValue)
+            {
+                CurrentSemanticValue = result.Value;
+                return true;
+            }
+        }
+        catch
+        {
+            // Suppress
+        }
+
+        return false;
+    }
+
+    public Statement? GetStatement() => CurrentSemanticValue;
+
+    #region Internal Factory Engine Mapping Methods
+
+    internal static string CleanString(string lit)
+    {
+        ArgumentNullException.ThrowIfNull(lit);
+        if (lit.StartsWith('L')) lit = lit[1..];
+
+        string content = lit.Length >= 2 && lit.StartsWith('"') && lit.EndsWith('"') ? lit[1..^1] : lit;
+        return Regex.Unescape(content);
+    }
+
+    internal static LocalVar MakeLocalVar(string varName) => new()
+    {
+        Name = varName ?? string.Empty
+    };
+
+    internal static LocalVar MakeLocalVar(string typeName, string varName) => new()
+    {
+        Type = typeName ?? string.Empty,
+        Name = varName ?? string.Empty
+    };
+
+    internal static ConstantValue MakeTypedConstant(string typeName, ConstantValue c)
+    {
+        ArgumentNullException.ThrowIfNull(c);
+        return new()
+        {
+            TypeName = typeName ?? string.Empty,
             Type = c.Type,
-            StringValue = c.StringValue,
+            StringValue = c.StringValue ?? string.Empty,
             FloatValue = c.FloatValue,
             IntegerValue = c.IntegerValue,
         };
     }
 
-    private ConstantValue MakeConstGuidString(ExpressionNode val) => new ConstantValue()
+    internal static ConstantValue MakeConstGuidString(string val) => new()
     {
         Type = IRConstantType.Name,
-        StringValue = (val as Literal).Lit
+        StringValue = val ?? string.Empty
     };
 
-    private ConstantValue MakeConstString(ExpressionNode val) => new ConstantValue()
+    internal static ConstantValue MakeConstString(string val) => new()
     {
         Type = IRConstantType.String,
-        StringValue = (val as Literal).Lit
+        StringValue = CleanString(val)
     };
 
-    private ConstantValue MakeConstInteger(ExpressionNode val) => new ConstantValue()
+    internal static ConstantValue MakeConstInteger(string val) => new()
     {
         Type = IRConstantType.Integer,
-        IntegerValue = Int64.Parse((val as Literal).Lit, ParserConstants.ParserCulture.NumberFormat)
+        IntegerValue = long.Parse(val, ParserConstants.ParserCulture.NumberFormat)
     };
 
-    private ConstantValue MakeConstFloat(ExpressionNode val) => new ConstantValue()
+    internal static ConstantValue MakeConstFloat(string val) => new()
     {
         Type = IRConstantType.Float,
-        FloatValue = Single.Parse((val as Literal).Lit, ParserConstants.ParserCulture.NumberFormat)
+        FloatValue = float.Parse(val, ParserConstants.ParserCulture.NumberFormat)
     };
+
+    internal static object MakeParamList(RValue single) => new StatementParamList
+    {
+        Params = [single]
+    };
+
+    internal static object MakeParamList(object currentList, RValue next)
+    {
+        if (currentList is StatementParamList existingList)
+        {
+            existingList.Params.Add(next);
+            return existingList;
+        }
+        return new StatementParamList { Params = [next] };
+    }
+
+    #endregion
 }

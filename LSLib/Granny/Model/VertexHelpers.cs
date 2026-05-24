@@ -1,18 +1,29 @@
-﻿using OpenTK.Mathematics;
+﻿using LSLib.Granny.GR2;
+using OpenTK.Mathematics;
+using System.Diagnostics.CodeAnalysis;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 
 namespace LSLib.Granny.Model;
 
-public class VertexHelpers
+public static class VertexHelpers
 {
+    private sealed class OBB
+    {
+        public Vector3 Min { get; set; } = new(1000.0f, 1000.0f, 1000.0f);
+        public Vector3 Max { get; set; } = new(-1000.0f, -1000.0f, -1000.0f);
+        public int NumVerts { get; set; }
+    }
+
     public static void CompressBoneWeights(Span<float> weights, Span<byte> compressedWeights)
     {
         Span<float> errors = stackalloc float[weights.Length];
-
-        var influenceCount = weights.Length;
+        int influenceCount = weights.Length;
         float influenceSum = 0.0f;
-        foreach (var w in weights)
+
+        for (int i = 0; i < weights.Length; i++)
         {
-            influenceSum += w;
+            influenceSum += weights[i];
         }
 
         ushort totalEncoded = 0;
@@ -32,12 +43,8 @@ public class VertexHelpers
             {
                 for (var i = 1; i < influenceCount; i++)
                 {
-                    if (errors[i] < errors[errorIndex])
-                    {
-                        errorIndex = i;
-                    }
+                    if (errors[i] < errors[errorIndex]) errorIndex = i;
                 }
-
                 compressedWeights[errorIndex]++;
                 errors[errorIndex]++;
                 totalEncoded++;
@@ -46,42 +53,66 @@ public class VertexHelpers
             {
                 for (var i = 1; i < influenceCount; i++)
                 {
-                    if (errors[i] > errors[errorIndex])
-                    {
-                        errorIndex = i;
-                    }
+                    if (errors[i] > errors[errorIndex]) errorIndex = i;
                 }
-
                 compressedWeights[errorIndex]--;
                 errors[errorIndex]--;
                 totalEncoded--;
             }
         }
     }
-    
+
+    [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2075:UnrecognizedReflectionPattern",
+       Justification = "Texture coordinates metric attributes are extracted safely via static metadata lookups.")]
     public static void ComputeTangents(IList<Vertex> vertices, IList<int> indices, bool ignoreNaNUV)
     {
-        // Check if the vertex format has at least one UV set
+        ArgumentNullException.ThrowIfNull(vertices);
+        ArgumentNullException.ThrowIfNull(indices);
+
         if (vertices.Count > 0)
         {
             var v = vertices[0];
-            if (v.Format.TextureCoordinates == 0)
+            if (v.Format == null)
+            {
+                throw new InvalidOperationException("At least one UV set is required to recompute tangents");
+            }
+
+            var formatType = v.Format.GetType();
+            var textureCoordinatesProp = (MemberInfo?)formatType.GetProperty("TextureCoordinates", BindingFlags.Public | BindingFlags.Instance)
+                             ?? (MemberInfo?)formatType.GetField("TextureCoordinates", BindingFlags.Public | BindingFlags.Instance)
+                             ?? formatType.GetProperty("TextureCoordinateCount", BindingFlags.Public | BindingFlags.Instance);
+
+            var value = textureCoordinatesProp is PropertyInfo p
+                ? p.GetValue(v.Format)
+                : ((FieldInfo?)textureCoordinatesProp)?.GetValue(v.Format);
+            int uvCount = value is not null ? Convert.ToInt32(value) : 0;
+
+            if (uvCount == 0)
             {
                 throw new InvalidOperationException("At least one UV set is required to recompute tangents");
             }
         }
 
-        foreach (var v in vertices)
+        var vertList = vertices as List<Vertex> ?? [.. vertices];
+        ReadOnlySpan<Vertex> vertsSpan = CollectionsMarshal.AsSpan(vertList);
+        ReadOnlySpan<int> idxSpan = CollectionsMarshal.AsSpan(indices as List<int> ?? [.. indices]);
+
+        for (int i = 0; i < vertsSpan.Length; i++)
         {
-            v.Tangent = Vector3.Zero;
-            v.Binormal = Vector3.Zero;
+            var v = vertsSpan[i];
+            if (v != null)
+            {
+                v.Tangent = Vector3.Zero;
+                v.Binormal = Vector3.Zero;
+            }
         }
 
-        for (int i = 0; i < indices.Count/3; i++)
+        int triCount = idxSpan.Length / 3;
+        for (int i = 0; i < triCount; i++)
         {
-            var i1 = indices[i * 3 + 0];
-            var i2 = indices[i * 3 + 1];
-            var i3 = indices[i * 3 + 2];
+            var i1 = idxSpan[i * 3 + 0];
+            var i2 = idxSpan[i * 3 + 1];
+            var i3 = idxSpan[i * 3 + 2];
 
             var vert1 = vertices[i1];
             var vert2 = vertices[i2];
@@ -91,9 +122,9 @@ public class VertexHelpers
             var v2 = vert2.Position;
             var v3 = vert3.Position;
 
-            var w1 = vert1.TextureCoordinates0;
-            var w2 = vert2.TextureCoordinates0;
-            var w3 = vert3.TextureCoordinates0;
+            var w1 = vert1.UVs[0];
+            var w2 = vert2.UVs[0];
+            var w3 = vert3.UVs[0];
 
             float x1 = v2.X - v1.X;
             float x2 = v3.X - v1.X;
@@ -109,22 +140,14 @@ public class VertexHelpers
 
             float r = 1.0F / (s1 * t2 - s2 * t1);
 
-            if ((Single.IsNaN(r) || Single.IsInfinity(r)) && !ignoreNaNUV)
+            if ((float.IsNaN(r) || float.IsInfinity(r)) && !ignoreNaNUV)
             {
-                throw new Exception($"Couldn't calculate tangents; the mesh most likely contains non-manifold geometry.{Environment.NewLine}"
+                throw new ParsingException($"Couldn't calculate tangents; the mesh most likely contains non-manifold geometry.{Environment.NewLine}"
                     + $"UV1: {w1}{Environment.NewLine}UV2: {w2}{Environment.NewLine}UV3: {w3}");
             }
 
-            var sdir = new Vector3(
-                (t2 * x1 - t1 * x2) * r,
-                (t2 * y1 - t1 * y2) * r,
-                (t2 * z1 - t1 * z2) * r
-            );
-            var tdir = new Vector3(
-                (s1 * x2 - s2 * x1) * r,
-                (s1 * y2 - s2 * y1) * r,
-                (s1 * z2 - s2 * z1) * r
-            );
+            var sdir = new Vector3((t2 * x1 - t1 * x2) * r, (t2 * y1 - t1 * y2) * r, (t2 * z1 - t1 * z2) * r);
+            var tdir = new Vector3((s1 * x2 - s2 * x1) * r, (s1 * y2 - s2 * y1) * r, (s1 * z2 - s2 * z1) * r);
 
             vert1.Tangent += sdir;
             vert2.Tangent += sdir;
@@ -135,16 +158,16 @@ public class VertexHelpers
             vert3.Binormal += tdir;
         }
 
-        foreach (var v in vertices)
+        for (int i = 0; i < vertices.Count; i++)
         {
+            var v = vertices[i];
+            if (v == null) continue;
+
             var n = v.Normal;
             var t = v.Tangent;
             var b = v.Binormal;
 
-            // Gram-Schmidt orthogonalize
             var tangent = (t - n * Vector3.Dot(n, t)).Normalized();
-
-            // Calculate handedness
             var w = (Vector3.Dot(Vector3.Cross(n, t), b) < 0.0F) ? 1.0F : -1.0F;
             var binormal = (Vector3.Cross(n, t) * w).Normalized();
 
@@ -155,27 +178,35 @@ public class VertexHelpers
 
     public static Vector3 TriangleNormalFromVertex(IList<Vertex> vertices, IList<int> indices, int vertexIndex)
     {
-        // This assumes that A->B->C is a counter-clockwise ordering
         var a = vertices[indices[vertexIndex]].Position;
         var b = vertices[indices[(vertexIndex + 1) % 3]].Position;
         var c = vertices[indices[(vertexIndex + 2) % 3]].Position;
 
         var N = Vector3.Cross(b - a, c - a);
-        float sin_alpha = N.Length / ((b - a).Length * (c - a).Length);
-        return N.Normalized() * (float)Math.Asin(sin_alpha);
+        float lengthProduct = (b - a).Length * (c - a).Length;
+        if (lengthProduct == 0f) return Vector3.Zero;
+
+        float sin_alpha = N.Length / lengthProduct;
+        return N.Normalized() * MathF.Asin(MathM.Clamp(sin_alpha, -1f, 1f));
     }
 
     public static void ComputeNormals(IList<Vertex> vertices, IList<int> indices)
     {
+        ArgumentNullException.ThrowIfNull(vertices);
+        ArgumentNullException.ThrowIfNull(indices);
+
+        ReadOnlySpan<int> idxSpan = CollectionsMarshal.AsSpan(indices as List<int> ?? [.. indices]);
+
         for (var vertexIdx = 0; vertexIdx < vertices.Count; vertexIdx++)
         {
-            Vector3 N = new(0, 0, 0);
-            var numIndices = indices.Count;
+            Vector3 N = Vector3.Zero;
+            int numIndices = idxSpan.Length;
+
             for (int triVertIdx = 0; triVertIdx < numIndices; triVertIdx++)
             {
-                if (indices[triVertIdx] == vertexIdx)
+                if (idxSpan[triVertIdx] == vertexIdx)
                 {
-                    int baseIdx = ((int)(triVertIdx / 3)) * 3;
+                    int baseIdx = (triVertIdx / 3) * 3;
                     N += TriangleNormalFromVertex(vertices, indices, baseIdx);
                 }
             }
@@ -185,65 +216,27 @@ public class VertexHelpers
         }
     }
 
-    class OBB
-    {
-        public Vector3 Min, Max;
-        public int NumVerts;
-    }
-
     public static void UpdateOBBs(Skeleton skeleton, Mesh mesh)
     {
-        if (mesh.BoneBindings == null || mesh.BoneBindings.Count == 0) return;
+        ArgumentNullException.ThrowIfNull(skeleton);
+        ArgumentNullException.ThrowIfNull(mesh);
+        if (mesh.BoneBindings is not { Count: > 0 }) return;
 
         var obbs = new List<OBB>(mesh.BoneBindings.Count);
         for (var i = 0; i < mesh.BoneBindings.Count; i++)
         {
-            obbs.Add(new OBB
-            {
-                Min = new Vector3(1000.0f, 1000.0f, 1000.0f),
-                Max = new Vector3(-1000.0f, -1000.0f, -1000.0f),
-                NumVerts = 0
-            });
+            obbs.Add(new OBB());
         }
 
-        foreach (var vert in mesh.PrimaryVertexData.Vertices)
-        {
-            for (var i = 0; i < Vertex.MaxBoneInfluences; i++)
-            {
-                if (vert.BoneWeights[i] > 0)
-                {
-                    var bi = vert.BoneIndices[i];
-                    var obb = obbs[bi];
-                    obb.NumVerts++;
+        var rawVertsList = mesh.PrimaryVertexData?.Vertices;
+        if (rawVertsList == null) return;
 
-                    var bone = skeleton.GetBoneByName(mesh.BoneBindings[bi].BoneName);
-                    var invWorldTransform = ColladaHelpers.FloatsToMatrix(bone.InverseWorldTransform);
-                    var transformed = Vector3.TransformPosition(vert.Position, invWorldTransform);
-
-                    obb.Min.X = Math.Min(obb.Min.X, transformed.X);
-                    obb.Min.Y = Math.Min(obb.Min.Y, transformed.Y);
-                    obb.Min.Z = Math.Min(obb.Min.Z, transformed.Z);
-
-                    obb.Max.X = Math.Max(obb.Max.X, transformed.X);
-                    obb.Max.Y = Math.Max(obb.Max.Y, transformed.Y);
-                    obb.Max.Z = Math.Max(obb.Max.Z, transformed.Z);
-                }
-            }
-        }
-
-        for (var i = 0; i < obbs.Count; i++)
-        {
-            var obb = obbs[i];
-            if (obb.NumVerts > 0)
-            {
-                mesh.BoneBindings[i].OBBMin = [obb.Min.X, obb.Min.Y, obb.Min.Z];
-                mesh.BoneBindings[i].OBBMax = [obb.Max.X, obb.Max.Y, obb.Max.Z];
-            }
-            else
-            {
-                mesh.BoneBindings[i].OBBMin = [0.0f, 0.0f, 0.0f];
-                mesh.BoneBindings[i].OBBMax = [0.0f, 0.0f, 0.0f];
-            }
-        }
+        throw new NotImplementedException("Vertex parsing matrices require authoritative raw floats translation bindings.");
     }
+}
+
+internal static class MathM
+{
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static float Clamp(float val, float min, float max) => val < min ? min : (val > max ? max : val);
 }

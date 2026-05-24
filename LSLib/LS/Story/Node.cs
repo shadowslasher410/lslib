@@ -1,6 +1,6 @@
 ﻿namespace LSLib.LS.Story;
 
-public abstract class Node : OsirisSerializable
+public abstract class Node : IOsirisSerializable
 {
     public enum Type : byte
     {
@@ -13,17 +13,19 @@ public abstract class Node : OsirisSerializable
         Rule = 7,
         InternalQuery = 8,
         UserQuery = 9
-    };
+    }
 
-    public UInt32 Index;
-    public DatabaseReference DatabaseRef;
-    public string Name;
-    public byte NumParams;
+    public uint Index { get; set; }
+    public DatabaseReference DatabaseRef { get; set; } = new();
+    public string Name { get; set; } = string.Empty;
+    public byte NumParams { get; set; } 
 
     public virtual void Read(OsiReader reader)
     {
+        ArgumentNullException.ThrowIfNull(reader);
+
         DatabaseRef = reader.ReadDatabaseRef();
-        Name = reader.ReadString();
+        Name = reader.ReadString() ?? string.Empty;
         if (Name.Length > 0)
         {
             NumParams = reader.ReadByte();
@@ -32,10 +34,14 @@ public abstract class Node : OsirisSerializable
 
     public virtual void Write(OsiWriter writer)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+
         DatabaseRef.Write(writer);
         writer.Write(Name);
         if (Name.Length > 0)
+        {
             writer.Write(NumParams);
+        }
     }
 
     public abstract Type NodeType();
@@ -46,10 +52,11 @@ public abstract class Node : OsirisSerializable
 
     public virtual void PostLoad(Story story)
     {
-        if (DatabaseRef.IsValid)
+        ArgumentNullException.ThrowIfNull(story);
+
+        if (DatabaseRef.IsValid && DatabaseRef.Resolve() is Database database)
         {
-            var database = DatabaseRef.Resolve();
-            if (database.OwnerNode != null)
+            if (database.OwnerNode is not null)
             {
                 throw new InvalidDataException("A database cannot be assigned to multiple database nodes!");
             }
@@ -68,6 +75,9 @@ public abstract class Node : OsirisSerializable
 
     public virtual void DebugDump(TextWriter writer, Story story)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(story);
+
         if (Name.Length > 0)
         {
             writer.Write("{0}({1}): ", Name, NumParams);
@@ -84,13 +94,14 @@ public abstract class Node : OsirisSerializable
     }
 }
 
-
 public abstract class TreeNode : Node
 {
-    public NodeEntryItem NextNode;
+    public NodeEntryItem NextNode { get; set; } = new();
 
     public override void Read(OsiReader reader)
     {
+        ArgumentNullException.ThrowIfNull(reader);
+
         base.Read(reader);
         NextNode = new NodeEntryItem();
         NextNode.Read(reader);
@@ -98,30 +109,35 @@ public abstract class TreeNode : Node
 
     public override void Write(OsiWriter writer)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+
         base.Write(writer);
         NextNode.Write(writer);
     }
 
     public override void PostLoad(Story story)
     {
+        ArgumentNullException.ThrowIfNull(story);
+
         base.PostLoad(story);
 
-        if (NextNode.NodeRef.IsValid)
+        if (NextNode.NodeRef is { IsValid: true } &&
+            NextNode.NodeRef.Resolve() is RuleNode ruleNode &&
+            NextNode.GoalRef is not null)
         {
-            var nextNode = NextNode.NodeRef.Resolve();
-            if (nextNode is RuleNode)
-            {
-                (nextNode as RuleNode).DerivedGoalRef = new GoalReference(story, NextNode.GoalRef.Index);
-            }
+            ruleNode.DerivedGoalRef = new(story, NextNode.GoalRef.Index);
         }
     }
 
     public override void DebugDump(TextWriter writer, Story story)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(story);
+
         base.DebugDump(writer, story);
 
         writer.Write("    Next: ");
         NextNode.DebugDump(writer, story);
-        writer.WriteLine("");
+        writer.WriteLine();
     }
 }

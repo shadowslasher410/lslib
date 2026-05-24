@@ -1,226 +1,162 @@
 ﻿using LSLib.DebuggerFrontend.ExpressionParser;
 using LSLib.LS.Story;
 using LSLib.LS.Story.Compiler;
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Text;
-using System.Text.RegularExpressions;
-using System.Threading.Tasks;
+using System.Runtime.InteropServices;
 
 namespace LSTools.DebuggerFrontend;
 
-class PendingExpressionEvaluation
+public class PendingExpressionEvaluation
 {
-    public DAPRequest Request;
-    public EvaluationResults Results;
-    public NodeDebugInfo Node;
-    public FunctionDebugInfo Function;
+    public required DAPRequest Request { get; init; }
+    public required EvaluationResults Results { get; init; }
+    public required NodeDebugInfo Node { get; init; }
+    public required FunctionDebugInfo Function { get; init; }
 }
 
-class ExpressionEvaluator
+class ExpressionEvaluator(
+    StoryDebugInfo debugInfo,
+    DAPStream dap,
+    DebuggerClient dbgClient,
+    EvaluationResultManager results)
 {
-    private StoryDebugInfo DebugInfo;
-    private DebuggerClient DbgClient;
-    private DAPStream DAP;
-    private Dictionary<FunctionNameAndArity, NodeDebugInfo> NameToNodeMap;
-    public DatabaseEnumerator DatabaseDumper;
-    private EvaluationResultManager EvalResults;
-    private Dictionary<UInt32, PendingExpressionEvaluation> PendingEvaluations = new Dictionary<UInt32, PendingExpressionEvaluation>();
+    private Dictionary<FunctionNameAndArity, NodeDebugInfo> _nameToNodeMap = [];
+    private readonly Dictionary<uint, PendingExpressionEvaluation> _pendingEvaluations = [];
+    public DatabaseEnumerator DatabaseDumper { get; init; } = new(dbgClient, dap, debugInfo, results);
 
-    public ExpressionEvaluator(StoryDebugInfo debugInfo, DAPStream dap, DebuggerClient dbgClient, ValueFormatter formatter,
-        EvaluationResultManager results)
+
+    public void Initialize()
     {
-        DebugInfo = debugInfo;
-        DbgClient = dbgClient;
-        DAP = dap;
-        DatabaseDumper = new DatabaseEnumerator(dbgClient, dap, debugInfo, formatter, results);
-        EvalResults = results;
-
-        DbgClient.OnEvaluateRow = this.OnEvaluateRow;
-        DbgClient.OnEvaluateFinished = this.OnEvaluateFinished;
-
+        dbgClient.OnEvaluateRow = OnEvaluateRow;
+        dbgClient.OnEvaluateFinished = OnEvaluateFinished;
         MakeFunctionNameMap();
     }
 
-
     private void MakeFunctionNameMap()
     {
-        NameToNodeMap = new Dictionary<FunctionNameAndArity, NodeDebugInfo>();
-        foreach (var node in DebugInfo.Nodes)
+        _nameToNodeMap = [];
+        foreach (var node in debugInfo.Nodes.Values)
         {
-            if (node.Value.FunctionName != null)
+            if (node.FunctionName is null) continue;
+
+            ref var existingNode = ref CollectionsMarshal.GetValueRefOrAddDefault(_nameToNodeMap, node.FunctionName, out bool exists);
+
+            if (!exists || existingNode?.Type != Node.Type.UserQuery)
             {
-                NodeDebugInfo existingNode;
-                // Make sure that we don't overwrite user queries with their PROC equivalents
-                if (NameToNodeMap.TryGetValue(node.Value.FunctionName, out existingNode))
-                {
-                    if (existingNode.Type != Node.Type.UserQuery)
-                    {
-                        NameToNodeMap[node.Value.FunctionName] = node.Value;
-                    }
-                }
-                else
-                {
-                    NameToNodeMap.Add(node.Value.FunctionName, node.Value);
-                }
+                existingNode = node;
             }
         }
     }
 
-
-    private MsgTypedValue ConstantToTypedValue(ConstantValue c)
+    private static MsgTypedValue ConstantToTypedValue(ConstantValue c)
     {
-        var tv = new MsgTypedValue();
-        // TODO - c.TypeName?
+        var typeId = c.Type switch
+        {
+            IRConstantType.Integer => (uint)Value.Type.Integer,
+            IRConstantType.Float => (uint)Value.Type.Float,
+            IRConstantType.String => (uint)Value.Type.String,
+            IRConstantType.Name => (uint)Value.Type.GuidString,
+            _ => throw new ArgumentException($"Constant has unknown or unmappable type: {c.Type}")
+        };
+
+        var tv = new MsgTypedValue { TypeId = typeId };
+
         switch (c.Type)
         {
-            case IRConstantType.Integer:
-                tv.TypeId = (UInt32)Value.Type.Integer;
-                tv.Intval = c.IntegerValue;
-                break;
-
-            case IRConstantType.Float:
-                tv.TypeId = (UInt32)Value.Type.Float;
-                tv.Floatval = c.FloatValue;
-                break;
-
+            case IRConstantType.Integer: tv.Intval = c.IntegerValue; break;
+            case IRConstantType.Float: tv.Floatval = c.FloatValue; break;
             case IRConstantType.String:
-                tv.TypeId = (UInt32)Value.Type.String;
-                tv.Stringval = c.StringValue;
-                break;
-
-            case IRConstantType.Name:
-                tv.TypeId = (UInt32)Value.Type.GuidString;
-                tv.Stringval = c.StringValue;
-                break;
-
-            default:
-                throw new ArgumentException("Constant has unknown type");
+            case IRConstantType.Name: tv.Stringval = c.StringValue; break;
         }
 
         return tv;
     }
 
-
-    private MsgTypedValue VariableToTypedValue(LocalVar lvar, CoalescedFrame frame)
+    private static MsgTypedValue VariableToTypedValue(LocalVar lvar, CoalescedFrame frame)
     {
-        // TODO - lvar.Type?
         if (lvar.Name == "_")
         {
-            var tv = new MsgTypedValue();
-            tv.TypeId = (UInt32)Value.Type.None;
-            return tv;
+            return new MsgTypedValue { TypeId = (uint)Value.Type.None };
         }
-        else
-        {
-            var frameVar = frame.Variables.FirstOrDefault(v => v.Name == lvar.Name);
-            if (frameVar == null)
-            {
-                throw new RequestFailedException($"Variable does not exist: \"{lvar.Name}\"");
-            }
 
-            return frameVar.TypedValue;
-        }
+        var frameVar = frame.Variables.FirstOrDefault(v => v.Name == lvar.Name)
+            ?? throw new RequestFailedException($"Variable does not exist within the current evaluation context frame: \"{lvar.Name}\"");
+
+        return frameVar.TypedValue;
     }
 
-
-    private MsgTuple ParamsToTuple(IEnumerable<RValue> args, CoalescedFrame frame)
+    private static MsgTuple ParamsToTuple(IEnumerable<RValue> args, CoalescedFrame? frame)
     {
         var tuple = new MsgTuple();
         foreach (var arg in args)
         {
-            if (arg is ConstantValue)
+            switch (arg)
             {
-                tuple.Column.Add(ConstantToTypedValue(arg as ConstantValue));
-            }
-            else
-            {
-                if (frame != null)
-                {
-                    tuple.Column.Add(VariableToTypedValue(arg as LocalVar, frame));
-                }
-                else
-                {
-                    throw new RequestFailedException("Local variables cannot be referenced without a stack frame");
-                }
+                case ConstantValue constVal:
+                    tuple.Column.Add(ConstantToTypedValue(constVal));
+                    break;
+                case LocalVar lvar when frame is not null:
+                    tuple.Column.Add(VariableToTypedValue(lvar, frame));
+                    break;
+                case LocalVar:
+                    throw new RequestFailedException("Local variables cannot be safely evaluated without an active context stack frame reference.");
             }
         }
-
         return tuple;
     }
 
-    public void EvaluateCall(DAPRequest request, Statement stmt, CoalescedFrame frame, bool allowMutation)
+    public void EvaluateCall(DAPRequest request, Statement stmt, CoalescedFrame? frame, bool allowMutation)
     {
-        NodeDebugInfo node;
         var func = new FunctionNameAndArity(stmt.Name, stmt.Params.Count);
-        if (!NameToNodeMap.TryGetValue(func, out node))
+        if (!_nameToNodeMap.TryGetValue(func, out var node))
         {
-            DAP.SendReply(request, "Name not found: " + func);
+            dap.SendReply(request, $"Name signature not found: {func}");
             return;
         }
 
-        var function = DebugInfo.Functions[node.FunctionName];
-        var args = ParamsToTuple(stmt.Params, frame);
-
-        DbgEvaluate.Types.EvalType evalType;
-        switch (node.Type)
+        if (node.FunctionName is { } funcName)
         {
-            case Node.Type.Database:
-                if (stmt.Not)
-                {
-                    evalType = DbgEvaluate.Types.EvalType.Insert;
-                }
-                else
-                {
-                    evalType = DbgEvaluate.Types.EvalType.Delete;
-                }
-                break;
+            var function = debugInfo.Functions[funcName];
+            var args = ParamsToTuple(stmt.Params, frame);
 
-            case Node.Type.Proc:
-                if (stmt.Not)
-                {
-                    throw new RequestFailedException("\"NOT\" statements not supported for PROCs");
-                }
+            EvalType evalType = node.Type switch
+            {
+                Node.Type.Database => stmt.Not ? EvalType.Insert : EvalType.Delete,
+                Node.Type.Proc when stmt.Not => throw new RequestFailedException("\"NOT\" statements are not supported for PROC types."),
+                Node.Type.Proc => EvalType.Insert,
 
-                evalType = DbgEvaluate.Types.EvalType.Insert;
-                break;
+                Node.Type.DivQuery or
+                Node.Type.InternalQuery or
+                Node.Type.UserQuery when stmt.Not => throw new RequestFailedException("\"NOT\" statements are not supported for QRY types."),
+                Node.Type.DivQuery or
+                Node.Type.InternalQuery or
+                Node.Type.UserQuery => EvalType.IsValid,
 
-            case Node.Type.DivQuery:
-            case Node.Type.InternalQuery:
-            case Node.Type.UserQuery:
-                if (stmt.Not)
-                {
-                    throw new RequestFailedException("\"NOT\" statements not supported for QRYs");
-                }
+                _ => throw new RequestFailedException($"Evaluation target node type execution layout profile is not supported: {node.Type}")
+            };
 
-                evalType = DbgEvaluate.Types.EvalType.IsValid;
-                break;
+            if ((evalType != EvalType.IsValid || node.Type == Node.Type.UserQuery) && !allowMutation)
+            {
+                throw new RequestFailedException("Evaluation was rejected because it could mutate active game memory state fields.");
+            }
 
-            default:
-                throw new RequestFailedException($"Eval node type not supported: {node.Type}");
+            uint seq = dbgClient.SendEvaluate(evalType, node.Id, args);
+
+            List<string> argNames = [.. function.Params.Select(static arg => arg.Name)];
+
+            _pendingEvaluations.Add(seq, new PendingExpressionEvaluation
+            {
+                Request = request,
+                Results = results.MakeResults(function.Params.Count, argNames),
+                Node = node,
+                Function = function
+            });
         }
-
-        if ((evalType != DbgEvaluate.Types.EvalType.IsValid
-            || node.Type == Node.Type.UserQuery)
-            && !allowMutation)
+        else
         {
-            throw new RequestFailedException($"Evaluation could cause game state change");
+            throw new InvalidOperationException($"The evaluated node {node.Id} does not possess a valid FunctionName signature.");
         }
-        
-        UInt32 seq = DbgClient.SendEvaluate(evalType, node.Id, args);
-
-        var argNames = function.Params.Select(arg => arg.Name).ToList();
-        var eval = new PendingExpressionEvaluation
-        {
-            Request = request,
-            Results = EvalResults.MakeResults(function.Params.Count, argNames),
-            Node = node,
-            Function = function
-        };
-        PendingEvaluations.Add(seq, eval);
     }
+
 
     public void EvaluateName(DAPRequest request, string name, bool allowMutation)
     {
@@ -230,72 +166,58 @@ class ExpressionEvaluator
             return;
         }
 
-        // TODO - this is bad for performance!
-        var db = DebugInfo.Databases.Values.FirstOrDefault(r => r.Name == name);
-        if (db == null)
+        var db = debugInfo.Databases.Values.FirstOrDefault(r => r.Name == name)
+            ?? throw new RequestFailedException($"Target database signature context record does not exist: \"{name}\"");
+
+        if (!allowMutation)
         {
-            throw new RequestFailedException($"Database does not exist: \"{name}\"");
+            throw new RequestFailedException($"Evaluation of database '{name}' rejected: inspecting database states requires side-effect mutation permissions.");
         }
 
         DatabaseDumper.RequestDatabaseEvaluation(request, db.Id);
     }
 
-    private Statement Parse(string expression)
-    {
-        var exprBytes = Encoding.UTF8.GetBytes(expression);
-        using (var exprStream = new MemoryStream(exprBytes))
-        {
-            var scanner = new ExpressionScanner();
-            scanner.SetSource(exprStream);
-            var parser = new ExpressionParser(scanner);
-            bool parsed = parser.Parse();
-
-            if (parsed)
-            {
-                return parser.GetStatement();
-            }
-            else
-            {
-                return null;
-            }
-        }
-    }
-
     private void SendUsage()
     {
-        string usageText = $@"Basic Usage:
-    Dump the contents of a database: DB_Database
-    Insert a row into a database (EXPERIMENTAL!): DB_Database(1, 2, 3)
-    Delete a row from a database (EXPERIMENTAL!): NOT DB_Database(4, 5, 6)
-    Evaluate a query: QRY_Query(""test"")
-    Evaluate a built-in query: IntegerSum(100, 200, _)
-    Call a PROC: PROC_Proc(111.0, TEST_12345678-1234-1234-1234-123456789abc)
-    Call a built-in call (NOT YET COMPLETE!): SetStoryEvent(...)
-    Trigger an event: GameStarted(""FTJ_FortJoy"", 1)
+        const string usageText = """
+            Basic Usage:
+                Dump the contents of a database: DB_Database
+                Insert a row into a database (EXPERIMENTAL!): DB_Database(1, 2, 3)
+                Delete a row from a database (EXPERIMENTAL!): NOT DB_Database(4, 5, 6)
+                Evaluate a query: QRY_Query("test")
+                Evaluate a built-in query: IntegerSum(100, 200, _)
+                Call a PROC: PROC_Proc(111.0, TEST_12345678-1234-1234-1234-123456789abc)
+                Call a built-in call (NOT YET COMPLETE!): SetStoryEvent(...)
+                Trigger an event: GameStarted("FTJ_FortJoy", 1)
 
-Notes:
-    - Built-in queries will return their output if they succeed.
-    - You can use local variables from the active rule (_Char, etc.) in the expressions.
-";
-
-        var outputMsg = new DAPOutputMessage
+            Notes:
+                - Built-in queries will return their output if they succeed.
+                - You can use local variables from the active rule (_Char, etc.) in the expressions.
+            """;
+        dap.SendEvent("output", new DAPOutputMessage
         {
-            category = "console",
-            output = usageText
-        };
-        DAP.SendEvent("output", outputMsg);
+            Category = "console",
+            Output = usageText
+        });
+    }
+
+    private static Statement? Parse(string expression)
+    {
+        if (string.IsNullOrWhiteSpace(expression)) return null;
+        var parserHarness = new ExpressionParser.ExpressionParser(expression);
+        return parserHarness.Parse() ? parserHarness.GetStatement() : null;
     }
 
     public void Evaluate(DAPRequest request, string expression, CoalescedFrame frame, bool allowMutation)
     {
         var stmt = Parse(expression);
-        if (stmt == null)
+        if (stmt is null)
         {
-            DAP.SendReply(request, "Syntax error. Type \"help\" for usage.");
+            dap.SendReply(request, "Syntax error. Type \"help\" for usage.");
             return;
         }
 
-        if (stmt.Params == null)
+        if (stmt.Params is null)
         {
             EvaluateName(request, stmt.Name, allowMutation);
         }
@@ -305,104 +227,78 @@ Notes:
         }
     }
 
-    private void OnEvaluateRow(UInt32 seq, BkEvaluateRow msg)
+    private void OnEvaluateRow(uint seq, BkEvaluateRow msg)
     {
-        var results = PendingEvaluations[seq].Results;
+        ref var pendingEval = ref CollectionsMarshal.GetValueRefOrAddDefault(_pendingEvaluations, seq, out bool exists);
+        if (!exists || pendingEval is null) return;
+
+        var resultsObj = pendingEval.Results;
         foreach (var row in msg.Row)
         {
-            results.Add(row);
+            resultsObj.Add(row);
         }
     }
 
-    private void OnEvaluateFinished(UInt32 seq, BkEvaluateFinished msg)
+    private void OnEvaluateFinished(uint seq, BkEvaluateFinished msg)
     {
-        var eval = PendingEvaluations[seq];
+        if (!_pendingEvaluations.Remove(seq, out var eval)) return;
 
         if (msg.ResultCode != StatusCode.Success)
         {
-            DAP.SendReply(eval.Request, $"Evaluation failed: DBG server sent error code: {msg.ResultCode}");
+            dap.SendReply(eval.Request, $"Evaluation failed: DBG server sent error code: {msg.ResultCode}");
             return;
         }
 
-        var funcType = (LSLib.LS.Story.FunctionType)eval.Function.TypeId;
-        if (eval.Node.Type == Node.Type.UserQuery)
+        var funcType = eval.Node.Type == Node.Type.UserQuery
+            ? LSLib.LS.Story.FunctionType.UserQuery
+            : (LSLib.LS.Story.FunctionType)eval.Function.TypeId;
+
+        var (consoleText, resultText, returnResults) = funcType switch
         {
-            funcType = LSLib.LS.Story.FunctionType.UserQuery;
-        }
+            LSLib.LS.Story.FunctionType.Event =>
+                ($"Event {eval.Node.FunctionName} triggered", "", false),
 
-        string resultText = "";
-        string consoleText = "";
-        bool returnResults;
-        switch (funcType)
+            LSLib.LS.Story.FunctionType.Query or
+            LSLib.LS.Story.FunctionType.SysQuery or
+            LSLib.LS.Story.FunctionType.UserQuery =>
+                (msg.QuerySucceeded ? $"Query {eval.Node.FunctionName} SUCCEEDED" : $"Query {eval.Node.FunctionName} FAILED",
+                 "Query results",
+                 funcType != LSLib.LS.Story.FunctionType.UserQuery),
+
+            LSLib.LS.Story.FunctionType.Proc =>
+                ($"PROC {eval.Node.FunctionName} called", "", false),
+
+            LSLib.LS.Story.FunctionType.SysCall or
+            LSLib.LS.Story.FunctionType.Call =>
+                ($"Built-in function {eval.Node.FunctionName} called", "", false),
+
+            LSLib.LS.Story.FunctionType.Database =>
+                ($"Inserted row into {eval.Node.FunctionName}", "", false),
+
+            _ => throw new InvalidOperationException($"Unknown function type: {eval.Function.TypeId}")
+        };
+
+        if (consoleText is { Length: > 0 })
         {
-            case LSLib.LS.Story.FunctionType.Event:
-                consoleText = $"Event {eval.Node.FunctionName} triggered";
-                returnResults = false;
-                break;
-
-            case LSLib.LS.Story.FunctionType.Query:
-            case LSLib.LS.Story.FunctionType.SysQuery:
-            case LSLib.LS.Story.FunctionType.UserQuery:
-                if (msg.QuerySucceeded)
-                {
-                    consoleText = $"Query {eval.Node.FunctionName} SUCCEEDED";
-                }
-                else
-                {
-                    consoleText = $"Query {eval.Node.FunctionName} FAILED";
-                }
-
-                resultText = "Query results";
-                returnResults = (funcType != LSLib.LS.Story.FunctionType.UserQuery);
-                break;
-
-            case LSLib.LS.Story.FunctionType.Proc:
-                consoleText = $"PROC {eval.Node.FunctionName} called";
-                returnResults = false;
-                break;
-
-            case LSLib.LS.Story.FunctionType.SysCall:
-            case LSLib.LS.Story.FunctionType.Call:
-                consoleText = $"Built-in function {eval.Node.FunctionName} called";
-                returnResults = false;
-                break;
-
-            case LSLib.LS.Story.FunctionType.Database:
-                consoleText = $"Inserted row into {eval.Node.FunctionName}";
-                returnResults = false;
-                break;
-
-            default:
-                throw new InvalidOperationException($"Unknown function type: {eval.Function.TypeId}");
-        }
-
-        if (consoleText.Length > 0)
-        {
-            var outputMsg = new DAPOutputMessage
+            dap.SendEvent("output", new DAPOutputMessage
             {
-                category = "console",
-                output = consoleText + "\r\n"
-            };
-            DAP.SendEvent("output", outputMsg);
+                Category = "console",
+                Output = $"{consoleText}\r\n"
+            });
         }
 
         if (funcType == LSLib.LS.Story.FunctionType.Database)
         {
-            // For database inserts we'll return the whole database in the response.
             DatabaseDumper.RequestDatabaseEvaluation(eval.Request, eval.Node.DatabaseId);
             return;
         }
 
-        var evalResponse = new DAPEvaluateResponse
+        dap.SendReply(eval.Request, new DAPEvaluateResponse
         {
-            result = resultText,
-            namedVariables = 0,
-            indexedVariables = returnResults ? eval.Results.Count : 0,
-            variablesReference = returnResults ? eval.Results.VariablesReference : 0
-        };
-
-        DAP.SendReply(eval.Request, evalResponse);
-
-        PendingEvaluations.Remove(seq);
+            Result = resultText,
+            NamedVariables = 0,
+            IndexedVariables = returnResults ? eval.Results.Count : 0,
+            VariablesReference = returnResults ? eval.Results.VariablesReference : 0
+        });
     }
 }

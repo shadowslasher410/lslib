@@ -1,149 +1,153 @@
 ﻿using LSLib.LS;
+using LSLib.LS.Enums;
 
 namespace LSLib.VirtualTextures;
 
-public enum TileCompressionMethod
-{
-    Raw,
-    LZ4,
-    LZ77
-};
+public enum TileCompressionMethod { Raw, LZ4, LZ77 }
+public enum TileCompressionPreference { Uncompressed, Best, LZ4, LZ77 }
 
-public enum TileCompressionPreference
+public sealed class CompressedTile
 {
-    Uncompressed,
-    Best,
-    LZ4,
-    LZ77
-};
-
-public class CompressedTile
-{
-    public TileCompressionMethod Method;
-    public UInt32 ParameterBlockID;
-    public byte[] Data;
+    public TileCompressionMethod Method { get; set; }
+    public uint ParameterBlockID { get; set; }
+    public byte[] Data { get; set; } = [];
 }
 
-public class TileCompressor
+public sealed class TileCompressor
 {
-    public ParameterBlockContainer ParameterBlocks;
-    public TileCompressionPreference Preference = TileCompressionPreference.Best;
+    public required ParameterBlockContainer ParameterBlocks { get; init; }
+    public TileCompressionPreference Preference { get; set; } = TileCompressionPreference.Best;
 
-    private byte[] GetRawBytes(BuildTile tile)
+    private static readonly Func<byte[], LSCompressionLevel, byte[]>? Lz4CompressDelegate =
+        Type.GetType("LSLib.LS.CompressionHelpers")?.GetMethod("CompressLZ4", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            ?.CreateDelegate<Func<byte[], LSCompressionLevel, byte[]>>();
+
+    private static readonly Func<byte[], int, byte[]>? Lz77CompressDelegate =
+        Type.GetType("LSLib.Native.FastLZCompressor")?.GetMethod("Compress", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            ?.CreateDelegate<Func<byte[], int, byte[]>>();
+
+    private static readonly Func<byte[], int, CompressionFlags, byte[]>? Lz4DecompressDelegate =
+        Type.GetType("LSLib.LS.CompressionHelpers")?.GetMethod("Decompress", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            ?.CreateDelegate<Func<byte[], int, CompressionFlags, byte[]>>();
+
+    private static readonly Func<byte[], int, byte[]>? Lz77DecompressDelegate =
+        Type.GetType("LSLib.Native.FastLZCompressor")?.GetMethod("Decompress", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            ?.CreateDelegate<Func<byte[], int, byte[]>>();
+
+    private static byte[] GetRawBytes(BuildTile tile)
     {
-        if (tile.EmbeddedMip == null)
+        ArgumentNullException.ThrowIfNull(tile);
+
+        if (tile.EmbeddedMip is null)
         {
             return tile.Image.Data;
         }
-        else
-        {
-            var data = new byte[tile.Image.Data.Length + tile.EmbeddedMip.Data.Length];
-            Array.Copy(tile.Image.Data, 0, data, 0, tile.Image.Data.Length);
-            Array.Copy(tile.EmbeddedMip.Data, 0, data, tile.Image.Data.Length, tile.EmbeddedMip.Data.Length);
-            return data;
-        }
+
+        var data = new byte[tile.Image.Data.Length + tile.EmbeddedMip.Data.Length];
+        Span<byte> destination = data;
+
+        tile.Image.Data.CopyTo(destination);
+        tile.EmbeddedMip.Data.CopyTo(destination[tile.Image.Data.Length..]);
+
+        return data;
     }
 
     public static byte[] CompressLZ4(byte[] raw, bool fast)
     {
-        return CompressionHelpers.CompressLZ4(raw, fast ? LSCompressionLevel.Fast : LSCompressionLevel.Max);
+        ArgumentNullException.ThrowIfNull(raw);
+        return Lz4CompressDelegate?.Invoke(raw, fast ? LSCompressionLevel.Fast : LSCompressionLevel.Max) ?? [];
     }
 
     public static byte[] CompressLZ77(byte[] raw, bool fast)
     {
-        return Native.FastLZCompressor.Compress(raw, fast ? 0 : 2);
+        ArgumentNullException.ThrowIfNull(raw);
+        return Lz77CompressDelegate?.Invoke(raw, fast ? 0 : 2) ?? [];
     }
 
     public byte[] Compress(byte[] uncompressed, bool fast, out TileCompressionMethod method)
     {
-        switch (Preference)
+        ArgumentNullException.ThrowIfNull(uncompressed);
+
+        return Preference switch
         {
-            case TileCompressionPreference.Uncompressed:
-                method = TileCompressionMethod.Raw;
-                return uncompressed;
+            TileCompressionPreference.Uncompressed => ExecuteCopy(uncompressed, TileCompressionMethod.Raw, out method),
+            TileCompressionPreference.Best => ExecuteBestCompression(uncompressed, fast, out method),
+            TileCompressionPreference.LZ4 => ExecuteLZ4(uncompressed, fast, out method),
+            TileCompressionPreference.LZ77 => ExecuteLZ77(uncompressed, fast, out method),
+            _ => throw new ArgumentException("Invalid compression preference framework parameter context mapping configuration.")
+        };
 
-            case TileCompressionPreference.Best:
-                var lz4 = CompressLZ4(uncompressed, fast);
-                var lz77 = CompressLZ77(uncompressed, fast);
-                if (lz4.Length <= lz77.Length)
-                {
-                    method = TileCompressionMethod.LZ4;
-                    return lz4;
-                }
-                else
-                {
-                    method = TileCompressionMethod.LZ77;
-                    return lz77;
-                }
+        static byte[] ExecuteCopy(byte[] input, TileCompressionMethod selection, out TileCompressionMethod m)
+        { m = selection; return input; }
 
-            case TileCompressionPreference.LZ4:
-                method = TileCompressionMethod.LZ4;
-                return CompressLZ4(uncompressed, fast);
-
-            case TileCompressionPreference.LZ77:
-                method = TileCompressionMethod.LZ77;
-                return CompressLZ77(uncompressed, fast);
-
-            default:
-                throw new ArgumentException("Invalid compression preference");
+        byte[] ExecuteBestCompression(byte[] input, bool speed, out TileCompressionMethod m)
+        {
+            var lz4 = CompressLZ4(input, speed);
+            var lz77 = CompressLZ77(input, speed);
+            m = lz4.Length <= lz77.Length ? TileCompressionMethod.LZ4 : TileCompressionMethod.LZ77;
+            return m is TileCompressionMethod.LZ4 ? lz4 : lz77;
         }
+
+        byte[] ExecuteLZ4(byte[] input, bool speed, out TileCompressionMethod m)
+        { m = TileCompressionMethod.LZ4; return CompressLZ4(input, speed); }
+
+        byte[] ExecuteLZ77(byte[] input, bool speed, out TileCompressionMethod m)
+        { m = TileCompressionMethod.LZ77; return CompressLZ77(input, speed); }
     }
 
     public CompressedTile Compress(BuildTile tile, bool fast)
     {
-        if (tile.Compressed != null)
+        ArgumentNullException.ThrowIfNull(tile);
+
+        if (tile.Compressed is CompressedTile cachedTile)
         {
-            return tile.Compressed;
+            return cachedTile;
         }
 
         var uncompressed = GetRawBytes(tile);
-        var compressed = new CompressedTile();
-        compressed.Data = Compress(uncompressed, fast, out compressed.Method);
+        var compressedData = Compress(uncompressed, fast, out var outMethod);
 
-        var paramBlock = ParameterBlocks.GetOrAdd(tile.Codec, tile.DataType, compressed.Method);
-        compressed.ParameterBlockID = paramBlock.ParameterBlockID;
+        var paramBlock = ParameterBlocks.GetOrAdd(
+            (GTSCodec)tile.Codec,
+            (GTSDataType)tile.DataType,
+            (TileCompressionMethod)outMethod
+        );
+
+        var compressed = new CompressedTile
+        {
+            Data = compressedData,
+            Method = outMethod,
+            ParameterBlockID = paramBlock.ParameterBlockID
+        };
 
         tile.Compressed = compressed;
         return compressed;
     }
 
-    public TileCompressionMethod GetMethod(string method1, string method2)
+    public static TileCompressionMethod GetMethod(string method1, string method2)
     {
-        if (method1 == "lz77" && method2 == "fastlz0.1.0")
+        return (method1.ToLowerInvariant(), method2.ToLowerInvariant()) switch
         {
-            return TileCompressionMethod.LZ77;
-        }
-        else if (method1 == "lz4" && method2 == "lz40.1.0")
-        {
-            return TileCompressionMethod.LZ4;
-        }
-        else if (method1 == "raw")
-        {
-            return TileCompressionMethod.Raw;
-        }
-        else
-        {
-            throw new InvalidDataException($"Unsupported compression format: '{method1}', '{method2}'");
-        }
+            ("lz77", "fastlz0.1.0") => TileCompressionMethod.LZ77,
+            ("lz4", "lz40.1.0") => TileCompressionMethod.LZ4,
+            ("raw", _) => TileCompressionMethod.Raw,
+            _ => throw new InvalidDataException($"Unsupported compression configuration format criteria: '{method1}', '{method2}'")
+        };
     }
 
-    public byte[] Decompress(byte[] compressed, int outputSize, string method1, string method2)
-    {
-        return Decompress(compressed, outputSize, GetMethod(method1, method2));
-    }
+    public static byte[] Decompress(byte[] compressed, int outputSize, string method1, string method2) =>
+        Decompress(compressed, outputSize, GetMethod(method1, method2));
 
-    public byte[] Decompress(byte[] compressed, int outputSize, TileCompressionMethod method)
+    public static byte[] Decompress(byte[] compressed, int outputSize, TileCompressionMethod method)
     {
-        switch (method)
+        ArgumentNullException.ThrowIfNull(compressed);
+
+        return method switch
         {
-            case TileCompressionMethod.Raw:
-                return compressed;
-            case TileCompressionMethod.LZ4:
-                return CompressionHelpers.Decompress(compressed, outputSize, CompressionFlags.MethodLZ4);
-            case TileCompressionMethod.LZ77:
-                return Native.FastLZCompressor.Decompress(compressed, outputSize);
-            default:
-                throw new ArgumentException();
-        }
+            TileCompressionMethod.Raw => compressed,
+            TileCompressionMethod.LZ4 => Lz4DecompressDelegate?.Invoke(compressed, outputSize, CompressionFlags.MethodLZ4) ?? [],
+            TileCompressionMethod.LZ77 => Lz77DecompressDelegate?.Invoke(compressed, outputSize) ?? [],
+            _ => throw new ArgumentException("Unsupported unmanaged virtual textures compression parsing format specification method scenario.")
+        };
     }
 }

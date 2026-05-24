@@ -1,4 +1,4 @@
-﻿using System;
+﻿using System.Runtime.InteropServices;
 
 namespace LSLib.Rcon;
 
@@ -22,35 +22,46 @@ public enum PacketId : byte
 
 public class RakNetConstants
 {
-    public const Byte ProtocolVersion = 6;
-    public static readonly byte[] Magic = new byte[] { 0x00, 0xff, 0xff, 0x00, 0xfe, 0xfe, 0xfe, 0xfe, 0xfd, 0xfd, 0xfd, 0xfd, 0x12, 0x34, 0x56, 0x78 };
+    public const byte ProtocolVersion = 6;
+    public static readonly byte[] Magic = [
+        0x00, 0xff, 0xff, 0x00, 0xfe, 0xfe, 0xfe, 0xfe,
+        0xfd, 0xfd, 0xfd, 0xfd, 0x12, 0x34, 0x56, 0x78
+    ];
 }
 
-public interface Packet
+public interface IPacket
 {
-    void Read(BinaryReaderBE Reader);
-    void Write(BinaryWriterBE Writer);
+    void Read(BinaryReaderBE reader);
+    void Write(BinaryWriterBE writer);
 }
 
-public struct SequenceNumber
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct SequenceNumber : IEquatable<SequenceNumber>, IComparable<SequenceNumber>
 {
-    public UInt32 Number;
+    public uint Number { get; set; }
 
-    public void Read(BinaryReaderBE Reader)
+    public void Read(BinaryReaderBE reader)
     {
-        Byte b1 = Reader.ReadByte();
-        Byte b2 = Reader.ReadByte();
-        Byte b3 = Reader.ReadByte();
-        Number = (UInt32)b1 | ((UInt32)b2 << 8) | ((UInt32)b3 << 16);
+        byte b1 = reader.ReadByte();
+        byte b2 = reader.ReadByte();
+        byte b3 = reader.ReadByte();
+
+        Number = (uint)b1 | ((uint)b2 << 8) | ((uint)b3 << 16);
     }
 
-    public void Write(BinaryWriterBE Writer)
+    public readonly void Write(BinaryWriterBE writer)
     {
-        Byte b1 = (Byte)(Number & 0xff);
-        Byte b2 = (Byte)((Number >> 8) & 0xff);
-        Byte b3 = (Byte)((Number >> 16) & 0xff);
-        Writer.Write(b1);
-        Writer.Write(b2);
-        Writer.Write(b3);
+        writer.Write((byte)(Number & 0xff));
+        writer.Write((byte)((Number >> 8) & 0xff));
+        writer.Write((byte)((Number >> 16) & 0xff));
     }
+    public readonly bool Equals(SequenceNumber other) => Number == other.Number;
+    public override readonly bool Equals(object? obj) => obj is SequenceNumber other && Equals(other);
+    public override readonly int GetHashCode() => Number.GetHashCode();
+    public readonly int CompareTo(SequenceNumber other) => Number.CompareTo(other.Number);
+
+    public static implicit operator uint(SequenceNumber seq) => seq.Number;
+    public static implicit operator SequenceNumber(uint val) => new() { Number = val };
+    public static bool operator ==(SequenceNumber left, SequenceNumber right) => left.Equals(right);
+    public static bool operator !=(SequenceNumber left, SequenceNumber right) => !left.Equals(right);
 }

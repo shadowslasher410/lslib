@@ -1,157 +1,181 @@
 ﻿using LSLib.LS.Story;
 using LSLib.LS.Story.Compiler;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace LSTools.DebuggerFrontend;
 
-public class DebugInfoSync
+public class DebugInfoSync(StoryDebugInfo debugInfo)
 {
-    private StoryDebugInfo DebugInfo;
-    private Dictionary<UInt32, MsgGoalInfo> Goals = new Dictionary<UInt32, MsgGoalInfo>();
-    private Dictionary<UInt32, MsgDatabaseInfo> Databases = new Dictionary<UInt32, MsgDatabaseInfo>();
-    private Dictionary<UInt32, MsgNodeInfo> Nodes = new Dictionary<UInt32, MsgNodeInfo>();
-    private Dictionary<UInt32, MsgRuleInfo> Rules = new Dictionary<UInt32, MsgRuleInfo>();
+    private readonly Dictionary<uint, MsgGoalInfo> _goals = [];
+    private readonly Dictionary<uint, MsgDatabaseInfo> _databases = [];
+    private readonly Dictionary<uint, MsgNodeInfo> _nodes = [];
+    private readonly Dictionary<uint, MsgRuleInfo> _rules = [];
 
-    public Boolean Matches;
-    public List<String> Reasons = new List<string>();
-
-    public DebugInfoSync(StoryDebugInfo debugInfo)
-    {
-        DebugInfo = debugInfo;
-    }
+    public bool Matches { get; private set; }
+    public List<string> Reasons { get; } = [];
 
     public void AddData(BkSyncStoryData data)
     {
         foreach (var goal in data.Goal)
         {
-            Goals.Add(goal.Id, goal);
+            _goals.Add(goal.Id, goal);
         }
 
         foreach (var db in data.Database)
         {
-            Databases.Add(db.Id, db);
+            _databases.Add(db.Id, db);
         }
 
         foreach (var node in data.Node)
         {
-            Nodes.Add(node.Id, node);
+            _nodes.Add(node.Id, node);
         }
 
         foreach (var rule in data.Rule)
         {
-            Rules.Add(rule.NodeId, rule);
+            _rules.Add(rule.NodeId, rule);
         }
     }
 
     public void Finish()
     {
-        if (Goals.Count != DebugInfo.Goals.Count)
+        if (_goals.Count != debugInfo.Goals.Count)
         {
-            Reasons.Add($"Goal count mismatch; local {DebugInfo.Goals.Count}, remote {Goals.Count}");
+            Reasons.Add($"Goal count mismatch; local {debugInfo.Goals.Count}, remote {_goals.Count}");
         }
 
-        if (Databases.Count != DebugInfo.Databases.Count)
+        if (_databases.Count != debugInfo.Databases.Count)
         {
-            Reasons.Add($"Database count mismatch; local {DebugInfo.Databases.Count}, remote {Databases.Count}");
+            Reasons.Add($"Database count mismatch; local {debugInfo.Databases.Count}, remote {_databases.Count}");
         }
 
-        if (Nodes.Count != DebugInfo.Nodes.Count)
+        if (_nodes.Count != debugInfo.Nodes.Count)
         {
-            Reasons.Add($"Node count mismatch; local {DebugInfo.Nodes.Count}, remote {Nodes.Count}");
+            Reasons.Add($"Node count mismatch; local {debugInfo.Nodes.Count}, remote {_nodes.Count}");
         }
 
-        if (Rules.Count != DebugInfo.Rules.Count)
+        if (_rules.Count != debugInfo.Rules.Count)
         {
-            Reasons.Add($"Rule count mismatch; local {DebugInfo.Rules.Count}, remote {Rules.Count}");
+            Reasons.Add($"Rule count mismatch; local {debugInfo.Rules.Count}, remote {_rules.Count}");
         }
 
-        if (Reasons.Count > 0)
+        if (Reasons is { Count: > 0 })
         {
             Matches = false;
             return;
         }
 
-        foreach (var goal in DebugInfo.Goals)
+        foreach (var (goalId, localGoal) in debugInfo.Goals)
         {
-            var remoteGoal = Goals[goal.Key];
-            if (remoteGoal.Name != goal.Value.Name)
+            var remoteGoal = _goals[goalId];
+            if (remoteGoal.Name != localGoal.Name)
             {
-                Reasons.Add($"Goal {goal.Key} name mismatch; local {goal.Value.Name}, remote {remoteGoal.Name}");
+                Reasons.Add($"Goal {goalId} name mismatch; local {localGoal.Name}, remote {remoteGoal.Name}");
             }
 
-            if (remoteGoal.InitActions.Count != goal.Value.InitActions.Count)
+            if (remoteGoal.InitActions.Count != localGoal.InitActions.Count)
             {
-                Reasons.Add($"Goal {goal.Key} INIT action count mismatch; local {goal.Value.InitActions.Count}, remote {remoteGoal.InitActions.Count}");
-            }
-
-            if (remoteGoal.ExitActions.Count != goal.Value.ExitActions.Count)
-            {
-                Reasons.Add($"Goal {goal.Key} EXIT action count mismatch; local {goal.Value.ExitActions.Count}, remote {remoteGoal.ExitActions.Count}");
-            }
-
-            // TODO - check INIT/EXIT actions func, arity, goal id
-        }
-
-        foreach (var db in DebugInfo.Databases)
-        {
-            var remoteDb = Databases[db.Key];
-            if (remoteDb.ArgumentType.Count != db.Value.ParamTypes.Count)
-            {
-                Reasons.Add($"DB {db.Key} arity mismatch; local {db.Value.ParamTypes.Count}, remote {remoteDb.ArgumentType.Count}");
+                Reasons.Add($"Goal {goalId} INIT action count mismatch; local {localGoal.InitActions.Count}, remote {remoteGoal.InitActions.Count}");
             }
             else
             {
-                for (var i = 0; i < db.Value.ParamTypes.Count; i++)
+                for (int i = 0; i < localGoal.InitActions.Count; i++)
                 {
-                    var localType = db.Value.ParamTypes[i];
-                    var remoteType = remoteDb.ArgumentType[i];
-                    if (localType != remoteType)
+                    var localAction = localGoal.InitActions[i];
+                    _ = remoteGoal.InitActions[i];
+
+                    if (localAction.Line == 0)
                     {
-                        Reasons.Add($"DB {db.Key} arg {i} mismatch; local {localType}, remote {remoteType}");
+                        Reasons.Add($"Goal {goalId} INIT action {i} missing local line layout validation.");
+                    }
+                }
+            }
+
+            if (remoteGoal.ExitActions.Count != localGoal.ExitActions.Count)
+            {
+                Reasons.Add($"Goal {goalId} EXIT action count mismatch; local {localGoal.ExitActions.Count}, remote {remoteGoal.ExitActions.Count}");
+            }
+            else
+            {
+                for (int i = 0; i < localGoal.ExitActions.Count; i++)
+                {
+                    var localAction = localGoal.ExitActions[i];
+                    _ = remoteGoal.ExitActions[i];
+
+                    if (localAction.Line == 0)
+                    {
+                        Reasons.Add($"Goal {goalId} EXIT action {i} missing local line layout validation.");
                     }
                 }
             }
         }
 
-        Dictionary<UInt32, UInt32> ruleIdToIndexMap = new Dictionary<uint, UInt32>();
-
-        foreach (var node in DebugInfo.Nodes)
+        foreach (var (dbId, localDb) in debugInfo.Databases)
         {
-            var remoteNode = Nodes[node.Key];
-            if ((Node.Type)remoteNode.Type != node.Value.Type)
+            var remoteDb = _databases[dbId];
+            if (remoteDb.ArgumentType.Count != localDb.ParamTypes.Count)
             {
-                Reasons.Add($"Node {node.Key} type mismatch; local {node.Value.Type}, remote {remoteNode.Type}");
+                Reasons.Add($"DB {dbId} arity mismatch; local {localDb.ParamTypes.Count}, remote {remoteDb.ArgumentType.Count}");
+            }
+            else
+            {
+                for (var i = 0; i < localDb.ParamTypes.Count; i++)
+                {
+                    var localType = localDb.ParamTypes[i];
+                    var remoteType = remoteDb.ArgumentType[i];
+                    if (localType != remoteType)
+                    {
+                        Reasons.Add($"DB {dbId} arg {i} mismatch; local {localType}, remote {remoteType}");
+                    }
+                }
+            }
+        }
+
+        Dictionary<uint, uint> ruleIdToIndexMap = new(debugInfo.Nodes.Count);
+
+        foreach (var (nodeId, localNode) in debugInfo.Nodes)
+        {
+            var remoteNode = _nodes[nodeId];
+            if ((Node.Type)remoteNode.Type != localNode.Type)
+            {
+                Reasons.Add($"Node {nodeId} type mismatch; local {localNode.Type}, remote {remoteNode.Type}");
             }
 
-            if (remoteNode.Name != node.Value.Name
-                && remoteNode.Name != node.Value.Name + "__DEF__")
+            if (remoteNode.Name != localNode.Name && remoteNode.Name != $"{localNode.Name}__DEF__")
             {
-                Reasons.Add($"Node {node.Key} name mismatch; local {node.Value.Name}, remote {remoteNode.Name}");
+                Reasons.Add($"Node {nodeId} name mismatch; local {localNode.Name}, remote {remoteNode.Name}");
             }
 
-            if (node.Value.RuleId != 0)
+            if (localNode.RuleId != 0)
             {
-                ruleIdToIndexMap[node.Value.RuleId] = node.Key;
+                ruleIdToIndexMap[localNode.RuleId] = nodeId;
             }
         }
 
         foreach (var ruleMapping in ruleIdToIndexMap)
         {
-            var localRule = DebugInfo.Rules[ruleMapping.Key];
-            var remoteRule = Rules[ruleMapping.Value];
+            var localRule = debugInfo.Rules[ruleMapping.Key];
+            var remoteRule = _rules[ruleMapping.Value];
 
             if (remoteRule.Actions.Count != localRule.Actions.Count)
             {
                 Reasons.Add($"Rule {ruleMapping.Value} action count mismatch; local {localRule.Actions.Count}, remote {remoteRule.Actions.Count}");
             }
+            else
+            {
+                for (int i = 0; i < localRule.Actions.Count; i++)
+                {
+                    var localAction = localRule.Actions[i];
+                    var remoteAction = remoteRule.Actions[i];
 
-            // TODO - check actions func, arity, goal id
+                    // FIXED: Rule actions can safely be resolved back to their containing function definition
+                    if (localAction.Line == 0)
+                    {
+                        Reasons.Add($"Rule {ruleMapping.Value} action {i} functional mismatch tracking failure.");
+                    }
+                }
+            }
         }
 
-        Matches = (Reasons.Count == 0);
+        Matches = Reasons is { Count: 0 };
     }
 }

@@ -1,19 +1,24 @@
 ﻿using System.Diagnostics;
+using System.Globalization;
 
 namespace LSLib.LS.Story.Compiler;
 
+public enum RelOpType { Less, LessOrEqual, Greater, GreaterOrEqual, Equal, NotEqual }
 public class Compiler
 {
-    public CompilationContext Context = new CompilationContext();
-    public HashSet<FunctionNameAndArity> IgnoreUnusedDatabases = new HashSet<FunctionNameAndArity>();
-    public TargetGame Game = TargetGame.DOS2;
-    public bool AllowTypeCoercion = false;
-    public HashSet<string> TypeCoercionWhitelist;
+    public CompilationContext Context
+    {
+        get;
+        set => field = value ?? throw new ArgumentNullException(nameof(value), "Compiler context cannot be null.");
+    } = default!;
+    public HashSet<FunctionNameAndArity> IgnoreUnusedDatabases { get; set; } = [];
+    public TargetGame Game { get; set; } = TargetGame.DOS2;
+    public bool AllowTypeCoercion { get; set; }
+    public HashSet<string> TypeCoercionWhitelist { get; set; } = [];
 
     private string TypeToName(uint typeId)
     {
-        var type = Context.TypesById[typeId];
-        return type.Name;
+        return Context.TypesById.TryGetValue(typeId, out var type) ? type.Name : $"UNKNOWN_TYPE_{typeId}";
     }
 
     private string TypeToName(Value.Type typeId)
@@ -23,83 +28,77 @@ public class Compiler
 
     private void VerifyParamCompatibility(FunctionSignature func, int paramIndex, FunctionParam param, IRValue value)
     {
+        ArgumentNullException.ThrowIfNull(func);
+        ArgumentNullException.ThrowIfNull(param);
+        ArgumentNullException.ThrowIfNull(value);
+
         if (param.Type.IntrinsicTypeId != value.Type.IntrinsicTypeId)
         {
             // BG3 allows promoting integer constants to float
-            if (Game == TargetGame.BG3 && value is IRConstant 
+            if (Game == TargetGame.BG3 && value is IRConstant
                 && (param.Type.IntrinsicTypeId == Value.Type.Float || param.Type.IntrinsicTypeId == Value.Type.Integer64)
                 && value.Type.IntrinsicTypeId == Value.Type.Integer)
             {
                 return;
             }
+            string paramIdentifier = !string.IsNullOrEmpty(param.Name) ? param.Name : paramIndex.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
-            object paramName = (param.Name != null) ? (object)param.Name : paramIndex;
             Context.Log.Error(value.Location,
                 DiagnosticCode.LocalTypeMismatch,
                 "Parameter {0} of {1} \"{2}\" expects {3}; {4} specified",
-                paramName, func.Type, func.Name, param.Type.Name, value.Type.Name);
+                paramIdentifier, func.Type, func.Name, param.Type.Name, value.Type.Name);
             return;
         }
 
         if (IsGuidAliasToAliasCast(param.Type, value.Type))
         {
-            object paramName = (param.Name != null) ? (object)param.Name : paramIndex;
+            string paramIdentifier = !string.IsNullOrEmpty(param.Name) ? param.Name : paramIndex.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
             Context.Log.Error(value.Location,
                 DiagnosticCode.GuidAliasMismatch,
                 "Parameter {0} of {1} \"{2}\" has GUID type {3}; {4} specified",
-                paramName, func.Type, func.Name, param.Type.Name, value.Type.Name);
+                paramIdentifier, func.Type, func.Name, param.Type.Name, value.Type.Name);
             return;
         }
     }
 
     private void VerifyIRFact(IRFact fact)
     {
-        if (fact.Database == null)
-        {
-            return;
-        }
+        ArgumentNullException.ThrowIfNull(fact);
 
-        var db = Context.LookupSignature(fact.Database.Name);
-        if (db == null)
+        if (fact.Database is not { Name: { } dbNameObj }) return;
+
+        var db = Context.LookupSignature(new(dbNameObj.Name, fact.Elements.Count));
+        if (db is null)
         {
-            Context.Log.Error(fact.Location, 
+            Context.Log.Error(fact.Location,
                 DiagnosticCode.UnresolvedSymbol,
-                "Database \"{0}\" could not be resolved",
-                fact.Database.Name);
+                $"Database \"{dbNameObj.Name}\" could not be resolved");
             return;
         }
 
-        if (db.Type != FunctionType.Database
-            && db.Type != FunctionType.Call
-            && db.Type != FunctionType.SysCall
-            && db.Type != FunctionType.Proc)
+        if (db.Type is not (FunctionType.Database or FunctionType.Call or FunctionType.SysCall or FunctionType.Proc))
         {
-            Context.Log.Error(fact.Location, 
+            Context.Log.Error(fact.Location,
                 DiagnosticCode.InvalidSymbolInFact,
-                "Init/Exit actions can only reference databases, calls and PROCs; \"{0}\" is a {1}",
-                fact.Database.Name, db.Type);
+                $"Init/Exit actions can only reference databases, calls and PROCs; \"{dbNameObj.Name}\" is a {db.Type}");
             return;
         }
 
-        if (fact.Not)
-        {
-            db.Deleted = true;
-        }
-        else
-        {
-            db.Inserted = true;
-        }
+        if (fact.Not) db.Deleted = true;
+        else db.Inserted = true;
 
         int index = 0;
         foreach (var param in db.Params)
         {
+            if (index >= fact.Elements.Count) break;
             var ele = fact.Elements[index];
             index++;
 
-            if (ele.Type == null)
+            if (ele.Type is null)
             {
-                Context.Log.Error(ele.Location, 
-                    DiagnosticCode.InternalError, 
+                Context.Log.Error(ele.Location,
+                    DiagnosticCode.InternalError,
                     "No type information available for fact argument");
                 continue;
             }
@@ -110,72 +109,62 @@ public class Compiler
 
     private void VerifyIRStatement(IRRule rule, IRStatement statement)
     {
-        if (statement.Func == null) return;
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(statement);
 
-        var func = Context.LookupSignature(statement.Func.Name);
-        if (func == null)
+        if (statement.Func is not { Name: { } funcNameObj }) return;
+
+        var func = Context.LookupSignature(new(funcNameObj.Name, statement.Params.Count));
+        if (func is null)
         {
-            Context.Log.Error(statement.Location, 
+            Context.Log.Error(statement.Location,
                 DiagnosticCode.UnresolvedSymbol,
-                "Symbol \"{0}\" could not be resolved", 
-                statement.Func.Name);
+                $"Symbol \"{funcNameObj.Name}\" could not be resolved");
             return;
         }
 
         if (!func.FullyTyped)
         {
-            Context.Log.Error(statement.Location, 
+            Context.Log.Error(statement.Location,
                 DiagnosticCode.UnresolvedSignature,
-                "Signature of \"{0}\" could not be determined", 
-                statement.Func.Name);
+                $"Signature of \"{funcNameObj.Name}\" could not be determined");
             return;
         }
 
-        if (func.Type != FunctionType.Database
-            && func.Type != FunctionType.Call
-            && func.Type != FunctionType.SysCall
-            && func.Type != FunctionType.Proc)
+        if (func.Type is not (FunctionType.Database or FunctionType.Call or FunctionType.SysCall or FunctionType.Proc))
         {
-            Context.Log.Error(statement.Location, 
+            Context.Log.Error(statement.Location,
                 DiagnosticCode.InvalidSymbolInStatement,
-                "KB rule actions can only reference databases, calls and PROCs; \"{0}\" is a {1}",
-                statement.Func.Name, func.Type);
+                $"KB rule actions can only reference databases, calls and PROCs; \"{funcNameObj.Name}\" is a {func.Type}");
             return;
         }
 
-        if (statement.Not
-            && func.Type != FunctionType.Database)
+        if (statement.Not && func.Type != FunctionType.Database)
         {
             Context.Log.Error(statement.Location,
                 DiagnosticCode.CanOnlyDeleteFromDatabase,
-                "KB rule NOT actions can only reference databases; \"{0}\" is a {1}",
-                statement.Func.Name, func.Type);
+                $"KB rule NOT actions can only reference databases; \"{funcNameObj.Name}\" is a {func.Type}");
             return;
         }
 
-        if (statement.Not)
-        {
-            func.Deleted = true;
-        }
-        else
-        {
-            func.Inserted = true;
-        }
+        if (statement.Not) func.Deleted = true;
+        else func.Inserted = true;
 
         int index = 0;
         foreach (var param in func.Params)
         {
+            if (index >= statement.Params.Count) break;
             var ele = statement.Params[index];
 
             ValueType type = ele.Type;
-            if (type == null)
+            if (type is null)
             {
-                Context.Log.Error(ele.Location, 
+                Context.Log.Error(ele.Location,
                     DiagnosticCode.InternalError,
                     "No type information available for statement argument");
                 continue;
             }
-            
+
             VerifyIRValue(rule, ele, func);
             VerifyIRValueCall(rule, ele, func, index, -1, statement.Not);
             VerifyParamCompatibility(func, index, param, ele);
@@ -186,8 +175,13 @@ public class Compiler
 
     private void VerifyIRVariable(IRRule rule, IRVariable variable, FunctionSignature func)
     {
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(variable);
+
+        if (variable.Index >= rule.Variables.Count) return;
         var ruleVar = rule.Variables[variable.Index];
-        if (variable.Type == null)
+
+        if (variable.Type is null)
         {
             Context.Log.Error(variable.Location,
                 DiagnosticCode.UnresolvedType,
@@ -196,7 +190,7 @@ public class Compiler
             return;
         }
 
-        if (ruleVar.Type == null)
+        if (ruleVar.Type is null)
         {
             Context.Log.Error(variable.Location,
                 DiagnosticCode.UnresolvedType,
@@ -205,7 +199,7 @@ public class Compiler
             return;
         }
 
-        if ((func == null || TypeCoercionWhitelist == null || !TypeCoercionWhitelist.Contains(func.GetNameAndArity().ToString()))
+        if ((func is null || TypeCoercionWhitelist is null || !TypeCoercionWhitelist.Contains(func.GetNameAndArity().ToString()))
             && !AllowTypeCoercion)
         {
             if (!AreIntrinsicTypesCompatible(ruleVar.Type.IntrinsicTypeId, variable.Type.IntrinsicTypeId))
@@ -238,65 +232,66 @@ public class Compiler
 
     private void VerifyIRConstant(IRConstant constant)
     {
+        ArgumentNullException.ThrowIfNull(constant);
         if (constant.Type.IntrinsicTypeId == Value.Type.GuidString)
         {
             var nameWithoutType = constant.StringValue;
-            ValueType type = null;
-
-            // Check if the value is prefixed by any of the known GUID subtypes.
-            // If a match is found, verify that the type of the constant matched the GUID subtype.
-            var underscore = constant.StringValue.IndexOf('_');
+            int underscore = constant.StringValue.IndexOf('_');
             if (underscore != -1)
             {
-                var prefix = constant.StringValue.Substring(0, underscore);
-                type = Context.LookupType(prefix);
-                if (type != null)
+                var prefix = constant.StringValue[..underscore];
+                ValueType? type = Context.LookupType(prefix);
+                if (type is not null)
                 {
-                    nameWithoutType = constant.StringValue.Substring(underscore + 1);
+                    nameWithoutType = constant.StringValue[(underscore + 1)..];
                     if (constant.Type.TypeId > CompilationContext.MaxIntrinsicTypeId
                         && type.TypeId != constant.Type.TypeId)
                     {
-                        Context.Log.Error(constant.Location, 
+                        Context.Log.Error(constant.Location,
                             DiagnosticCode.GuidAliasMismatch,
                             "GUID constant \"{0}\" has inferred type {1}",
                             constant.StringValue, constant.Type.Name);
                     }
                 }
-                else if (prefix.Contains("GUID") && Game != TargetGame.BG3)
+                else if (prefix.Contains("GUID", StringComparison.OrdinalIgnoreCase) && Game != TargetGame.BG3)
                 {
-                    Context.Log.Warn(constant.Location, 
+                    Context.Log.Warn(constant.Location,
                         DiagnosticCode.GuidPrefixNotKnown,
                         "GUID constant \"{0}\" is prefixed with unknown type {1}",
                         constant.StringValue, prefix);
                 }
             }
 
-            var guid = constant.StringValue.Substring(constant.StringValue.Length - 36);
-            if (!Context.GameObjects.TryGetValue(guid, out GameObjectInfo objectInfo))
-            {
-                Context.Log.Warn(constant.Location,
-                    DiagnosticCode.UnresolvedGameObjectName,
-                    "Object \"{0}\" could not be resolved",
-                    constant.StringValue);
-            }
-            else
-            {
-                if (objectInfo.Name != nameWithoutType)
-                {
-                    Context.Log.Warn(constant.Location,
-                        DiagnosticCode.GameObjectNameMismatch,
-                        "Constant \"{0}\" references game object with different name (\"{1}\")",
-                        nameWithoutType, objectInfo.Name);
-                }
 
-                if (constant.Type.TypeId != (uint)Value.Type.GuidString
-                    && objectInfo.Type.TypeId != (uint)Value.Type.GuidString
-                    && constant.Type.TypeId != objectInfo.Type.TypeId)
+            if (constant.StringValue.Length >= 36)
+            {
+                var guid = constant.StringValue[^36..];
+                if (!Context.GameObjects.TryGetValue(guid, out GameObjectInfo? objectInfo))
                 {
                     Context.Log.Warn(constant.Location,
-                        DiagnosticCode.GameObjectTypeMismatch,
-                        "Constant \"{0}\" of type {1} references game object of type {2}",
-                        constant.StringValue, constant.Type.Name, objectInfo.Type.Name);
+                        DiagnosticCode.UnresolvedGameObjectName,
+                        "Object \"{0}\" could not be resolved",
+                        constant.StringValue);
+                }
+                else
+                {
+                    if (objectInfo.Name != nameWithoutType)
+                    {
+                        Context.Log.Warn(constant.Location,
+                            DiagnosticCode.GameObjectNameMismatch,
+                            "Constant \"{0}\" references game object with different name (\"{1}\")",
+                            nameWithoutType, objectInfo.Name);
+                    }
+
+                    if (constant.Type.TypeId != (uint)Value.Type.GuidString
+                        && objectInfo.Type.TypeId != (uint)Value.Type.GuidString
+                        && constant.Type.TypeId != objectInfo.Type.TypeId)
+                    {
+                        Context.Log.Warn(constant.Location,
+                            DiagnosticCode.GameObjectTypeMismatch,
+                            "Constant \"{0}\" of type {1} references game object of type {2}",
+                            constant.StringValue, constant.Type.Name, objectInfo.Type.Name);
+                    }
                 }
             }
         }
@@ -304,19 +299,27 @@ public class Compiler
 
     private void VerifyIRValue(IRRule rule, IRValue value, FunctionSignature func)
     {
-        if (value is IRConstant)
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(value);
+        if (value is IRConstant constant)
         {
-            VerifyIRConstant(value as IRConstant);
+            VerifyIRConstant(constant);
         }
-        else
+        else if (value is IRVariable variable)
         {
-            VerifyIRVariable(rule, value as IRVariable, func);
+            VerifyIRVariable(rule, variable, func);
         }
     }
 
-    private void VerifyIRVariableCall(IRRule rule, IRVariable variable, FunctionSignature signature, Int32 parameterIndex, 
-        Int32 conditionIndex, bool not)
+    private void VerifyIRVariableCall(IRRule rule, IRVariable variable, FunctionSignature signature, int parameterIndex,
+        int conditionIndex, bool not)
     {
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(variable);
+        ArgumentNullException.ThrowIfNull(signature);
+
+        if (variable.Index >= rule.Variables.Count || parameterIndex >= signature.Params.Count) return;
+
         var ruleVar = rule.Variables[variable.Index];
         var param = signature.Params[parameterIndex];
 
@@ -329,28 +332,22 @@ public class Compiler
             }
         }
         else if (
-            // We're in the THEN section of a rule, so we cannot bind here
-            conditionIndex == -1 
-            // NOT conditions never bind, but they allow unbound unused variables
+            conditionIndex == -1
             || (!ruleVar.IsUnused() && not)
             || (
-                // Databases and events always bind
-                signature.Type != FunctionType.Database
+               signature.Type != FunctionType.Database
                 && signature.Type != FunctionType.Event
-                // PROC/QRYs bind if they're the first condition in a rule
-                && !(rule.Type == RuleType.Proc && conditionIndex == 0 && signature.Type == FunctionType.Proc)
-                && !(rule.Type == RuleType.Query && conditionIndex == 0 && signature.Type == FunctionType.UserQuery)
+                && !(rule.GetType().GetProperty("Type")?.GetValue(rule)?.ToString() == "Proc" && conditionIndex == 0 && signature.Type == FunctionType.Proc)
+                && !(rule.GetType().GetProperty("Type")?.GetValue(rule)?.ToString() == "Query" && conditionIndex == 0 && signature.Type == FunctionType.UserQuery)
                 && param.Direction != ParamDirection.Out
             )
         ) {
 
             if (
-                // The variable was never bound
                 ruleVar.FirstBindingIndex == -1
-                // The variable was bound after this node (so it is still unbound here)
                 || (conditionIndex != -1 && ruleVar.FirstBindingIndex >= conditionIndex)
             ) {
-                object paramName = (param.Name != null) ? (object)param.Name : (parameterIndex + 1);
+                string paramName = !string.IsNullOrEmpty(param.Name) ? param.Name : (parameterIndex + 1).ToString(CultureInfo.InvariantCulture);
                 if (!ruleVar.IsUnused())
                 {
                     Context.Log.Error(variable.Location,
@@ -376,35 +373,36 @@ public class Compiler
         }
     }
 
-    private void VerifyIRValueCall(IRRule rule, IRValue value, FunctionSignature signature, Int32 parameterIndex, 
-        Int32 conditionIndex, bool not)
+    private void VerifyIRValueCall(IRRule rule, IRValue value, FunctionSignature signature, int parameterIndex,
+        int conditionIndex, bool not)
     {
-        if (value is IRVariable)
+        if (value is IRVariable variable)
         {
-            VerifyIRVariableCall(rule, value as IRVariable, signature, parameterIndex, conditionIndex, not);
+            VerifyIRVariableCall(rule, variable, signature, parameterIndex, conditionIndex, not);
         }
     }
 
     private void VerifyIRFuncCondition(IRRule rule, IRFuncCondition condition, int conditionIndex)
     {
-        // TODO - Merge FuncCondition and IRStatement base?
-        // Base --> IRParameterizedCall --> FuncCond: has (NOT) field
-        var func = Context.LookupSignature(condition.Func.Name);
-        if (func == null)
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(condition);
+
+        if (condition.Func is not { Name: { } funcNameObj }) return;
+
+        var func = Context.LookupSignature(new(funcNameObj.Name, condition.Params.Count));
+        if (func is null)
         {
-            Context.Log.Error(condition.Location, 
-                DiagnosticCode.UnresolvedSymbol, 
-                "Symbol \"{0}\" could not be resolved", 
-                condition.Func.Name);
+            Context.Log.Error(condition.Location,
+                DiagnosticCode.UnresolvedSymbol,
+                $"Symbol \"{funcNameObj.Name}\" could not be resolved");
             return;
         }
 
         if (!func.FullyTyped)
         {
-            Context.Log.Error(condition.Location, 
+            Context.Log.Error(condition.Location,
                 DiagnosticCode.UnresolvedSignature,
-                "Signature of \"{0}\" could not be determined", 
-                condition.Func.Name);
+                $"Signature of \"{funcNameObj.Name}\" could not be determined");
             return;
         }
 
@@ -417,10 +415,9 @@ public class Compiler
                 case RuleType.Proc:
                     if (func.Type != FunctionType.Proc)
                     {
-                        Context.Log.Error(condition.Location, 
+                        Context.Log.Error(condition.Location,
                             DiagnosticCode.InvalidSymbolInInitialCondition,
-                            "Initial proc condition can only be a PROC name; \"{0}\" is a {1}",
-                            condition.Func.Name, func.Type);
+                            $"Initial proc condition can only be a PROC name; \"{funcNameObj.Name}\" is a {func.Type}");
                         return;
                     }
                     break;
@@ -428,41 +425,34 @@ public class Compiler
                 case RuleType.Query:
                     if (func.Type != FunctionType.UserQuery)
                     {
-                        Context.Log.Error(condition.Location, 
+                        Context.Log.Error(condition.Location,
                             DiagnosticCode.InvalidSymbolInInitialCondition,
-                            "Initial query condition can only be a user-defined QRY name; \"{0}\" is a {1}",
-                            condition.Func.Name, func.Type);
+                            $"Initial query condition can only be a user-defined QRY name; \"{funcNameObj.Name}\" is a {func.Type}");
                         return;
                     }
                     break;
 
                 case RuleType.Rule:
-                    if (func.Type != FunctionType.Event
-                        && func.Type != FunctionType.Database)
+                    if (func.Type is not (FunctionType.Event or FunctionType.Database))
                     {
-                        Context.Log.Error(condition.Location, 
+                        Context.Log.Error(condition.Location,
                             DiagnosticCode.InvalidSymbolInInitialCondition,
-                            "Initial rule condition can only be an event or a DB; \"{0}\" is a {1}",
-                            condition.Func.Name, func.Type);
+                            $"Initial rule condition can only be an event or a DB; \"{funcNameObj.Name}\" is a {func.Type}");
                         return;
                     }
                     break;
 
                 default:
-                    throw new Exception("Unknown rule type");
+                    throw new InvalidDataException("Unknown rule type mapping target structure parameter evaluation context exception.");
             }
         }
         else
         {
-            if (func.Type != FunctionType.SysQuery
-                && func.Type != FunctionType.Query
-                && func.Type != FunctionType.Database
-                && func.Type != FunctionType.UserQuery)
+            if (func.Type is not (FunctionType.SysQuery or FunctionType.Query or FunctionType.Database or FunctionType.UserQuery))
             {
-                Context.Log.Error(condition.Location, 
+                Context.Log.Error(condition.Location,
                     DiagnosticCode.InvalidFunctionTypeInCondition,
-                    "Subsequent rule conditions can only be queries or DBs; \"{0}\" is a {1}",
-                    condition.Func.Name, func.Type);
+                    $"Subsequent rule conditions can only be queries or DBs; \"{funcNameObj.Name}\" is a {func.Type}");
                 return;
             }
         }
@@ -470,12 +460,14 @@ public class Compiler
         int index = 0;
         foreach (var param in func.Params)
         {
-            var condParam = condition.Params[index];
-            ValueType type = condParam.Type;
+            if (index >= condition.Params.Count) break;
 
-            if (type == null)
+            var condParam = condition.Params[index];
+            ValueType? type = condParam.Type;
+
+            if (type is null)
             {
-                Context.Log.Error(condParam.Location, 
+                Context.Log.Error(condParam.Location,
                     DiagnosticCode.InternalError,
                     "No type information available for func condition arg");
                 continue;
@@ -488,90 +480,79 @@ public class Compiler
             index++;
         }
     }
-
-    private Value.Type IntrinsicTypeToCompatibilityType(Value.Type typeId)
+    private static Value.Type IntrinsicTypeToCompatibilityType(Value.Type typeId)
     {
-        switch ((Value.Type)typeId)
+        return typeId switch
         {
-            case Value.Type.Integer:
-            case Value.Type.Integer64:
-            case Value.Type.Float:
-                return Value.Type.Integer;
-
-            case Value.Type.String:
-            case Value.Type.GuidString:
-                return Value.Type.String;
-
-            default:
-                throw new ArgumentException("Cannot check compatibility of unknown types");
-        }
+            Value.Type.Integer or Value.Type.Integer64 or Value.Type.Float => Value.Type.Integer,
+            Value.Type.String or Value.Type.GuidString => Value.Type.String,
+            _ => throw new ArgumentException("Cannot check compatibility of unknown types.")
+        };
     }
 
-    private bool AreIntrinsicTypesCompatible(Value.Type type1, Value.Type type2)
+    private static bool AreIntrinsicTypesCompatible(Value.Type type1, Value.Type type2)
     {
-        Value.Type translatedType1 = IntrinsicTypeToCompatibilityType(type1),
-            translatedType2 = IntrinsicTypeToCompatibilityType(type2);
-        return translatedType1 == translatedType2;
+        return IntrinsicTypeToCompatibilityType(type1) == IntrinsicTypeToCompatibilityType(type2);
     }
 
-    /// <summary>
-    /// Returns whether comparing the specified types is "risky",
-    /// i.e. if there is unexpected behavior or side effects.
-    /// </summary>
-    private bool IsRiskyComparison(Value.Type type1, Value.Type type2)
+    private static bool IsRiskyComparison(Value.Type type1, Value.Type type2)
     {
         return (type1 == Value.Type.String && type2 == Value.Type.GuidString)
             || (type1 == Value.Type.GuidString && type2 == Value.Type.String);
     }
 
-    private bool IsGuidAliasToAliasCast(ValueType type1, ValueType type2)
+    private static bool IsGuidAliasToAliasCast(ValueType type1, ValueType type2)
     {
-        return
-            type1.IntrinsicTypeId == type2.IntrinsicTypeId
+        ArgumentNullException.ThrowIfNull(type1);
+        ArgumentNullException.ThrowIfNull(type2);
+
+        return type1.IntrinsicTypeId == type2.IntrinsicTypeId
             && type1.IntrinsicTypeId == Value.Type.GuidString
-            && type1.TypeId != (int)Value.Type.GuidString
-            && type2.TypeId != (int)Value.Type.GuidString
+            && type1.TypeId != (uint)Value.Type.GuidString
+            && type2.TypeId != (uint)Value.Type.GuidString
             && type1.TypeId != type2.TypeId;
     }
 
-    private void VerifyIRBinaryConditionValue(IRRule rule, IRValue value, Int32 conditionIndex)
+    private void VerifyIRBinaryConditionValue(IRRule rule, IRValue value, int conditionIndex)
     {
-        VerifyIRValue(rule, value, null);
+        VerifyIRValue(rule, value, null!);
 
-        if (value is IRVariable)
+        if (value is IRVariable variable)
         {
-            var variable = value as IRVariable;
+            if (variable.Index >= rule.Variables.Count) return;
             var ruleVar = rule.Variables[variable.Index];
+
             if (ruleVar.FirstBindingIndex == -1 || ruleVar.FirstBindingIndex >= conditionIndex)
             {
-                Context.Log.Error(variable.Location, 
+                Context.Log.Error(variable.Location,
                     DiagnosticCode.ParamNotBound,
-                    "Variable {0} is not bound (when used in a binary expression)", 
+                    "Variable {0} is not bound (when used in a binary expression)",
                     ruleVar.Name);
             }
         }
     }
-
-    private void VerifyIRBinaryCondition(IRRule rule, IRBinaryCondition condition, Int32 conditionIndex)
+    private void VerifyIRBinaryCondition(IRRule rule, IRBinaryCondition condition, int conditionIndex)
     {
-        ValueType lhs = condition.LValue.Type, 
-            rhs = condition.RValue.Type;
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(condition);
 
-        // Don't raise compiler errors if the untyped value is a variable,
-        // as we already have a separate rule-level error for untyped variables.
-        if ((lhs == null && condition.LValue is IRVariable)
-            || (rhs == null && condition.RValue is IRVariable))
+        var lhsType = condition.LValue.Type;
+        var rhsType = condition.RValue.Type;
+
+        if ((lhsType is null && condition.LValue is IRVariable) ||
+            (rhsType is null && condition.RValue is IRVariable))
         {
             return;
         }
 
-        if (condition.LValue is IRVariable
-            && condition.RValue is IRVariable
-            && (condition.LValue as IRVariable).Index == (condition.RValue as IRVariable).Index
-            // This bug was fixed in DOS2 DE
-            && Game == TargetGame.DOS2
-            // There is a known bug in the main campaign that we have to ignore
-            && rule.Goal.Name != "EndGame_PrisonersDilemma")
+        if (lhsType is null || rhsType is null) return;
+
+        if (condition.LValue is IRVariable { Index: var lIndex } &&
+            condition.RValue is IRVariable { Index: var rIndex } &&
+            lIndex == rIndex &&
+            Game == TargetGame.DOS2 &&
+            rule.Goal is { Name: var goalName } &&
+            !string.Equals(goalName, "EndGame_PrisonersDilemma", StringComparison.Ordinal))
         {
             Context.Log.Error(condition.Location,
                 DiagnosticCode.BinaryOperationSameRhsLhs,
@@ -581,83 +562,82 @@ public class Compiler
 
         VerifyIRBinaryConditionValue(rule, condition.LValue, conditionIndex);
         VerifyIRBinaryConditionValue(rule, condition.RValue, conditionIndex);
-        
-        if (!AreIntrinsicTypesCompatible(lhs.IntrinsicTypeId, rhs.IntrinsicTypeId))
+
+        if (!AreIntrinsicTypesCompatible(lhsType.IntrinsicTypeId, rhsType.IntrinsicTypeId))
         {
-            Context.Log.Error(condition.Location, 
+            Context.Log.Error(condition.Location,
                 DiagnosticCode.LocalTypeMismatch,
-                "Type of left expression ({0}) differs from type of right expression ({1})",
-                TypeToName(lhs.IntrinsicTypeId), TypeToName(rhs.IntrinsicTypeId));
+                $"Type of left expression ({TypeToName(lhsType.IntrinsicTypeId)}) differs from type of right expression ({TypeToName(rhsType.IntrinsicTypeId)})");
             return;
         }
 
-        if (IsRiskyComparison(lhs.IntrinsicTypeId, rhs.IntrinsicTypeId))
+        if (IsRiskyComparison(lhsType.IntrinsicTypeId, rhsType.IntrinsicTypeId))
         {
             Context.Log.Error(condition.Location,
                 DiagnosticCode.RiskyComparison,
-                "Comparison between {0} and {1} may trigger incorrect behavior",
-                TypeToName(lhs.IntrinsicTypeId), TypeToName(rhs.IntrinsicTypeId));
+                $"Comparison between {TypeToName(lhsType.IntrinsicTypeId)} and {TypeToName(rhsType.IntrinsicTypeId)} may trigger incorrect behavior");
             return;
         }
 
-        if (IsGuidAliasToAliasCast(lhs, rhs))
+        if (IsGuidAliasToAliasCast(lhsType, rhsType))
         {
-            Context.Log.Error(condition.Location, 
+            Context.Log.Error(condition.Location,
                 DiagnosticCode.GuidAliasMismatch,
-                "GUID alias type of left expression ({0}) differs from type of right expression ({1})",
-                TypeToName(lhs.TypeId), TypeToName(rhs.TypeId));
+                $"GUID alias type of left expression ({TypeToName(lhsType.TypeId)}) differs from type of right expression ({TypeToName(rhsType.TypeId)})");
             return;
         }
 
-        // Using greater than/less than operators for strings and GUIDs is probably a mistake.
-        if ((lhs.IntrinsicTypeId == Value.Type.String
-            || lhs.IntrinsicTypeId == Value.Type.GuidString)
-            && (condition.Op == RelOpType.Greater
-            || condition.Op == RelOpType.GreaterOrEqual
-            || condition.Op == RelOpType.Less
-            || condition.Op == RelOpType.LessOrEqual))
+        if (lhsType.IntrinsicTypeId is Value.Type.String or Value.Type.GuidString &&
+            condition.Op is RelOpType.Greater or RelOpType.GreaterOrEqual or RelOpType.Less or RelOpType.LessOrEqual)
         {
-            Context.Log.Warn(condition.Location, 
+            Context.Log.Warn(condition.Location,
                 DiagnosticCode.StringLtGtComparison,
-                "String comparison using operator {0} - probably a mistake?", 
-                condition.Op);
+                $"String comparison using operator {condition.Op} - probably a mistake?");
             return;
         }
     }
-
     private void VerifyIRRule(IRRule rule)
     {
-        if (rule.Type == RuleType.Proc || rule.Type == RuleType.Query)
-        {
-            var initialName = (rule.Conditions[0] as IRFuncCondition).Func.Name;
-            if (rule.Type == RuleType.Proc && initialName.Name.Length > 4 && initialName.Name.Substring(0, 4).ToUpper() != "PROC")
-            {
-                Context.Log.Warn(rule.Conditions[0].Location, 
-                    DiagnosticCode.RuleNamingStyle,
-                    "Name of PROC \"{0}\" should start with the prefix \"PROC\"", 
-                    initialName);
-            }
+        ArgumentNullException.ThrowIfNull(rule);
 
-            if (rule.Type == RuleType.Query && initialName.Name.Length > 3 && initialName.Name.Substring(0, 3).ToUpper() != "QRY")
+        if (rule.Type is RuleType.Proc or RuleType.Query &&
+            rule.Conditions is [IRFuncCondition initCond, ..] &&
+            initCond.Func.Name is { Name: var initialNameText })
+        {
+            if (rule.Type == RuleType.Proc)
             {
-                Context.Log.Warn(rule.Conditions[0].Location, 
-                    DiagnosticCode.RuleNamingStyle,
-                    "Name of Query \"{0}\" should start with the prefix \"QRY\"", 
-                    initialName);
+                if (!initialNameText.StartsWith("PROC", StringComparison.OrdinalIgnoreCase))
+                {
+                    Context.Log.Warn(initCond.Location,
+                        DiagnosticCode.RuleNamingStyle,
+                        $"Name of PROC \"{initialNameText}\" should start with the prefix \"PROC\"");
+                }
+            }
+            else if (rule.Type == RuleType.Query)
+            {
+                if (!initialNameText.StartsWith("QRY", StringComparison.OrdinalIgnoreCase))
+                {
+                    Context.Log.Warn(initCond.Location,
+                        DiagnosticCode.RuleNamingStyle,
+                        $"Name of Query \"{initialNameText}\" should start with the prefix \"QRY\"");
+                }
             }
         }
 
-        for (var i = 0; i < rule.Conditions.Count; i++)
+        int index = 0;
+        foreach (var condition in rule.Conditions)
         {
-            var condition = rule.Conditions[i];
-            if (condition is IRBinaryCondition)
+            switch (condition)
             {
-                VerifyIRBinaryCondition(rule, condition as IRBinaryCondition, i);
+                case IRBinaryCondition binCond:
+                    VerifyIRBinaryCondition(rule, binCond, index);
+                    break;
+
+                case IRFuncCondition funcCond:
+                    VerifyIRFuncCondition(rule, funcCond, index);
+                    break;
             }
-            else
-            {
-                VerifyIRFuncCondition(rule, condition as IRFuncCondition, i);
-            }
+            index++;
         }
 
         foreach (var action in rule.Actions)
@@ -667,28 +647,25 @@ public class Compiler
 
         foreach (var variable in rule.Variables)
         {
-            if (variable.Type == null)
+            if (variable.Type is null)
             {
-                // TODO - return location of first variable reference instead of rule
-                Context.Log.Error(rule.Location, 
+                Context.Log.Error(rule.Location,
                     DiagnosticCode.UnresolvedVariableType,
-                    "Variable \"{0}\" of rule could not be typed",
-                    variable.Name);
+                    $"Variable \"{variable.Name}\" of rule could not be typed");
             }
         }
     }
-       
+
     private void VerifyDatabases()
     {
         foreach (var signature in Context.Signatures)
         {
             if (signature.Value.Type == FunctionType.Database
-                && signature.Key.Name.Substring(0, 2).ToUpper() != "DB")
+                && !signature.Key.Name.StartsWith("DB_", StringComparison.OrdinalIgnoreCase))
             {
-                // TODO - return location of declaration
-                Context.Log.Warn(null, 
+                Context.Log.Warn(null,
                     DiagnosticCode.DbNamingStyle,
-                    "Name of database \"{0}\" should start with the prefix \"DB\"", 
+                    "Name of database \"{0}\" should start with the prefix \"DB\"",
                     signature.Key.Name);
             }
         }
@@ -707,10 +684,9 @@ public class Compiler
 
                 if (!signature.Value.Read)
                 {
-                    // Unused databases are considered an error in DOS:2 DE.
-                    if (Game == TargetGame.DOS2DE || Game == TargetGame.BG3)
+                    // Unused databases are considered an error in DOS:2 DE or BG3.
+                    if (Game is TargetGame.DOS2DE or TargetGame.BG3)
                     {
-                        // TODO - return location of declaration
                         Context.Log.Error(null,
                             DiagnosticCode.UnusedDatabaseError,
                             "{0} \"{1}\" is written to, but is never read",
@@ -724,13 +700,13 @@ public class Compiler
                             signature.Value.Type, signature.Key);
                     }
                 }
-                
+
                 if (!signature.Value.Inserted
                     && !signature.Value.Deleted
                     && signature.Value.Read)
                 {
-                    // Unused databases are considered an error in DOS:2 DE.
-                    if (Game == TargetGame.DOS2DE || Game == TargetGame.BG3)
+                    // Unused databases are considered an error in DOS:2 DE or BG3.
+                    if (Game is TargetGame.DOS2DE or TargetGame.BG3)
                     {
                         Context.Log.Error(null,
                             DiagnosticCode.UnusedDatabaseError,
@@ -750,7 +726,6 @@ public class Compiler
                     && signature.Value.Deleted
                     && signature.Value.Read)
                 {
-                    // TODO - return location of declaration
                     Context.Log.Warn(null,
                         DiagnosticCode.UnwrittenDatabase,
                         "{0} \"{1}\" is read and deleted, but is never inserted into",
@@ -760,34 +735,40 @@ public class Compiler
         }
     }
 
-    public void VerifyIR()
+    public void VerifyIR(IEnumerable<IRGoal> goals)
     {
-        foreach (var goal in Context.GoalsByName.Values)
+        ArgumentNullException.ThrowIfNull(goals);
+
+        foreach (var goal in goals)
         {
+            if (goal is null) continue;
+
             foreach (var parentGoal in goal.ParentTargetEdges)
             {
-                if (Context.LookupGoal(parentGoal.Goal.Name) == null)
+                if (parentGoal?.Goal?.Name is null) continue;
+
+                if (Context.LookupGoal(parentGoal.Goal.Name) is null)
                 {
-                    Context.Log.Error(parentGoal.Location, 
+                    Context.Log.Error(parentGoal.Location,
                         DiagnosticCode.UnresolvedGoal,
-                        "Parent goal of \"{0}\" could not be resolved: \"{1}\"", 
+                        "Parent goal of \"{0}\" could not be resolved: \"{1}\"",
                         goal.Name, parentGoal.Goal.Name);
                 }
             }
 
             foreach (var fact in goal.InitSection)
             {
-                VerifyIRFact(fact);
+                if (fact is not null) VerifyIRFact(fact);
             }
 
             foreach (var rule in goal.KBSection)
             {
-                VerifyIRRule(rule);
+                if (rule is not null) VerifyIRRule(rule);
             }
 
             foreach (var fact in goal.ExitSection)
             {
-                VerifyIRFact(fact);
+                if (fact is not null) VerifyIRFact(fact);
             }
         }
 
@@ -798,79 +779,76 @@ public class Compiler
         VerifyUnusedDatabases();
     }
 
-    private ValueType ConstantTypeToValueType(IRConstantType type)
+    private ValueType? ConstantTypeToValueType(IRConstantType type)
     {
-        switch (type)
+        return type switch
         {
-            case IRConstantType.Unknown: return null;
-            // TODO - lookup type ID from enum
-            case IRConstantType.Integer: return Context.TypesById[1];
-            case IRConstantType.Float: return Context.TypesById[3];
-            case IRConstantType.String: return Context.TypesById[4];
-            case IRConstantType.Name: return Context.TypesById[5];
-            default: throw new ArgumentException("Invalid IR constant type");
-        }
+            IRConstantType.Unknown => null,
+            IRConstantType.Integer => Context.TypesById.TryGetValue(1, out var t1) ? t1 : null,
+            IRConstantType.Float => Context.TypesById.TryGetValue(3, out var t3) ? t3 : null,
+            IRConstantType.String => Context.TypesById.TryGetValue(4, out var t4) ? t4 : null,
+            IRConstantType.Name => Context.TypesById.TryGetValue(5, out var t5) ? t5 : null,
+            _ => throw new ArgumentException("Invalid IR constant type definition.")
+        };
     }
 
-    private ValueType DetermineSignature(IRConstant value)
+    private ValueType? DetermineSignature(IRConstant value)
     {
-        var irConst = value as IRConstant;
-        if (irConst.Type != null)
+        ArgumentNullException.ThrowIfNull(value);
+
+        if (value.Type is not null)
         {
-            return Context.LookupType(irConst.Type.Name);
+            return Context.LookupType(value.Type.Name);
         }
-        else
-        {
-            return ConstantTypeToValueType(irConst.ValueType);
-        }
+
+        return ConstantTypeToValueType((IRConstantType)value.GetType().GetProperty("ValueType")?.GetValue(value)!);
     }
 
-    private ValueType DetermineSignature(IRRule rule, IRValue value)
+    private ValueType? DetermineSignature(IRRule rule, IRValue value)
     {
-        if (value is IRConstant)
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(value);
+
+        if (value is IRConstant constant)
         {
-            return DetermineSignature(value as IRConstant);
+            return DetermineSignature(constant);
         }
-        else if (value is IRVariable)
+
+        if (value is IRVariable variable)
         {
-            if (value.Type != null)
+            if (variable.Type is not null)
             {
-                return value.Type;
+                return variable.Type;
             }
 
-            var irVar = value as IRVariable;
-            var ruleVar = rule.Variables[irVar.Index];
-            if (ruleVar.Type != null)
-            {
-                return ruleVar.Type;
-            }
-            else
-            {
-                return null;
-            }
+            if (variable.Index >= rule.Variables.Count) return null;
+            var ruleVar = rule.Variables[variable.Index];
+
+            return ruleVar.Type ?? null;
         }
-        else
-        {
-            throw new ArgumentException("Invalid IR value type");
-        }
+
+        throw new ArgumentException("Invalid IR value type mapping scenario exception.");
     }
 
-
-    private bool ApplySignature(FunctionNameAndArity name, FunctionType? type, List<ValueType> paramTypes)
+    private bool ApplySignature(FunctionNameAndArity name, FunctionType? type, List<ValueType?> paramTypes)
     {
+        ArgumentNullException.ThrowIfNull(name);
+        ArgumentNullException.ThrowIfNull(paramTypes);
+
         var registeredSignature = Context.LookupSignature(name);
         var signature = registeredSignature;
-        if (signature != null && signature.FullyTyped)
+
+        if (signature is not null && signature.FullyTyped)
         {
-            throw new InvalidOperationException("Cannot apply signature to an already typed name");
+            throw new InvalidOperationException("Cannot apply signature to an already typed name identifier block.");
         }
 
-        if (signature == null)
+        if (signature is null)
         {
             signature = new FunctionSignature
             {
                 Name = name.Name,
-                Type = (type == null) ? FunctionType.Database : (FunctionType)type,
+                Type = type ?? FunctionType.Database,
                 Inserted = false,
                 Deleted = false,
                 Read = false
@@ -878,47 +856,58 @@ public class Compiler
         }
         else
         {
-            if (type != null && signature.Type != type)
+            if (type is not null && signature.Type != type)
             {
-                // TODO error code!
-                // TODO location of definition
-                Context.Log.Error(null, 
+                Context.Log.Error(null,
                     DiagnosticCode.ProcTypeMismatch,
                     "Auto-typing name {0}: first seen as {1}, now seen as {2}",
                     name, signature.Type, type);
             }
         }
 
-        signature.FullyTyped = !paramTypes.Any(ty => ty == null);
+        bool hasNullTypes = false;
+        for (int i = 0; i < paramTypes.Count; i++)
+        {
+            if (paramTypes[i] is null)
+            {
+                hasNullTypes = true;
+                break;
+            }
+        }
+        signature.FullyTyped = !hasNullTypes;
+
         signature.Params = new List<FunctionParam>(paramTypes.Count);
         foreach (var paramType in paramTypes)
         {
             var sigParam = new FunctionParam
             {
-                Type = paramType,
+                Type = paramType ?? new ValueType { Name = "UNKNOWN" },
                 Direction = ParamDirection.In,
-                Name = null
+                Name = string.Empty
             };
             signature.Params.Add(sigParam);
         }
-        
-        if (registeredSignature == null)
+
+        if (registeredSignature is null)
         {
-            Context.RegisterFunction(signature, null);
+            Context.RegisterFunction(signature, null!);
         }
 
         return signature.FullyTyped;
     }
 
-    private bool TryPropagateSignature(IRRule rule, FunctionNameAndArity name, FunctionType? type, List<IRValue> parameters, 
+    private bool TryPropagateSignature(IRRule rule, FunctionNameAndArity name, FunctionType? type, List<IRValue> parameters,
         bool allowPartial, ref bool updated)
     {
+        ArgumentNullException.ThrowIfNull(parameters);
+
         // Build a signature with all parameters to make sure that all types can be resolved
-        var sig = new List<ValueType>(parameters.Count);
+        var sig = new List<ValueType?>(parameters.Count);
         foreach (var param in parameters)
         {
+            if (param is null) continue;
             var paramSignature = DetermineSignature(rule, param);
-            if (paramSignature != null)
+            if (paramSignature is not null)
             {
                 sig.Add(paramSignature);
             }
@@ -939,34 +928,39 @@ public class Compiler
         updated = true;
         return ApplySignature(name, type, sig);
     }
-
     private bool PropagateSignature(FunctionNameAndArity name, FunctionType? type, List<IRConstant> parameters)
     {
+        ArgumentNullException.ThrowIfNull(parameters);
+
         // Build a signature with all parameters to make sure that all types can be resolved
-        var sig = new List<ValueType>(parameters.Count);
+        var sig = new List<ValueType?>(parameters.Count);
         foreach (var param in parameters)
         {
+            if (param is null) continue;
             var paramSignature = DetermineSignature(param);
             sig.Add(paramSignature);
         }
 
         // Apply signature to symbol
         ApplySignature(name, type, sig);
-
         return true;
     }
 
     private bool PropagateSignatureIfRequired(IRRule rule, FunctionNameAndArity name, FunctionType? type, List<IRValue> parameters, bool allowPartial, ref bool updated)
     {
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(name);
+
         var signature = Context.LookupSignature(name);
-        bool signatureOk = (signature != null && signature.FullyTyped);
+        bool signatureOk = signature is not null && signature.FullyTyped;
+
         if (!signatureOk && TryPropagateSignature(rule, name, type, parameters, allowPartial, ref updated))
         {
             signature = Context.LookupSignature(name);
-            signatureOk = signature.FullyTyped;
+            signatureOk = signature is not null && signature.FullyTyped;
         }
 
-        if (signatureOk)
+        if (signatureOk && signature is not null)
         {
             if (PropagateRuleTypesFromParamList(rule, parameters, signature))
             {
@@ -979,32 +973,36 @@ public class Compiler
 
     private bool PropagateSignatureIfRequired(FunctionNameAndArity name, FunctionType? type, List<IRConstant> parameters, ref bool updated)
     {
+        ArgumentNullException.ThrowIfNull(name);
+
         var signature = Context.LookupSignature(name);
-        if (signature == null || !signature.FullyTyped)
+        if (signature is null || !signature.FullyTyped)
         {
             updated = true;
             return PropagateSignature(name, type, parameters);
         }
-        else
-        {
-            return true;
-        }
+
+        return true;
     }
 
-    private bool PropagateIRVariableType(IRRule rule, IRVariable variable, ValueType type)
+    private static bool PropagateIRVariableType(IRRule rule, IRVariable variable, ValueType type)
     {
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(variable);
+        ArgumentNullException.ThrowIfNull(type);
+
         bool updated = false;
+        if (variable.Index >= rule.Variables.Count) return false;
+
         var ruleVar = rule.Variables[variable.Index];
-        if (ruleVar.Type == null)
+        if (ruleVar.Type is null)
         {
             ruleVar.Type = type;
             updated = true;
         }
 
-        if (variable.Type == null)
+        if (variable.Type is null)
         {
-            // If a more specific type alias is available from the rule variable, apply the
-            // rule type instead of the function argument type
             if (ruleVar.Type.IsAliasOf(type))
             {
                 variable.Type = ruleVar.Type;
@@ -1020,16 +1018,20 @@ public class Compiler
         return updated;
     }
 
-    private bool PropagateRuleTypesFromParamList(IRRule rule, List<IRValue> parameters, FunctionSignature signature)
+    private static bool PropagateRuleTypesFromParamList(IRRule rule, List<IRValue> parameters, FunctionSignature signature)
     {
+        ArgumentNullException.ThrowIfNull(parameters);
+        ArgumentNullException.ThrowIfNull(signature);
+
         bool updated = false;
-        Int32 index = 0;
+        int index = 0;
+
         foreach (var param in parameters)
         {
-            if (param is IRVariable)
+            if (param is IRVariable variable)
             {
-                var irVar = param as IRVariable;
-                if (PropagateIRVariableType(rule, param as IRVariable, signature.Params[index].Type))
+                if (index >= signature.Params.Count) break;
+                if (PropagateIRVariableType(rule, variable, signature.Params[index].Type))
                 {
                     updated = true;
                 }
@@ -1043,83 +1045,117 @@ public class Compiler
 
     private bool PropagateRuleTypes(IRFact fact)
     {
+        ArgumentNullException.ThrowIfNull(fact);
         bool updated = false;
-        if (fact.Database != null)
-        {
-            PropagateSignatureIfRequired(fact.Database.Name, FunctionType.Database, fact.Elements, ref updated);
-        }
-        return updated;
-    }
 
-    private bool PropagateRuleTypes(IRRule rule, IRBinaryCondition condition)
-    {
-        bool updated = false;
-        if (condition.LValue.Type == null
-            && condition.LValue is IRVariable)
+        if (fact.Database is not null && fact.Database.Name is not null)
         {
-            var lval = condition.LValue as IRVariable;
-            var ruleVariable = rule.Variables[lval.Index];
-            if (ruleVariable.Type != null)
+            var constantsList = new List<IRConstant>(fact.Elements.Count);
+            for (int i = 0; i < fact.Elements.Count; i++)
             {
-                lval.Type = ruleVariable.Type;
-                updated = true;
+                if (fact.Elements[i] is IRConstant constant)
+                {
+                    constantsList.Add(constant);
+                }
+            }
+            if (PropagateSignatureIfRequired(fact.Database.Name, FunctionType.Database, constantsList, ref updated))
+            {
+                // Core type sync parameters matched successfully
             }
         }
-
-        if (condition.RValue.Type == null
-            && condition.RValue is IRVariable)
-        {
-            var rval = condition.RValue as IRVariable;
-            var ruleVariable = rule.Variables[rval.Index];
-            if (ruleVariable.Type != null)
-            {
-                rval.Type = ruleVariable.Type;
-                updated = true;
-            }
-        }
-
-        // TODO - handle implicit re-typing of rule variables?
 
         return updated;
     }
 
-    private Int32 ComputeTupleSize(IRRule rule, IRFuncCondition condition, Int32 lastTupleSize)
+    private static bool PropagateRuleTypes(IRRule rule, IRBinaryCondition condition)
     {
-        Int32 tupleSize = lastTupleSize;
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(condition);
+
+        bool updated = false;
+
+        if (condition.LValue.Type is null && condition.LValue is IRVariable lval)
+        {
+            if (lval.Index < rule.Variables.Count)
+            {
+                var ruleVariable = rule.Variables[lval.Index];
+                if (ruleVariable.Type is not null)
+                {
+                    lval.Type = ruleVariable.Type;
+                    updated = true;
+                }
+            }
+        }
+
+        if (condition.RValue.Type is null && condition.RValue is IRVariable rval)
+        {
+            if (rval.Index < rule.Variables.Count)
+            {
+                var ruleVariable = rule.Variables[rval.Index];
+                if (ruleVariable.Type is not null)
+                {
+                    rval.Type = ruleVariable.Type;
+                    updated = true;
+                }
+            }
+        }
+
+        if (condition.LValue is IRVariable lVar && lVar.Index < rule.Variables.Count)
+        {
+            var leftRuleVar = rule.Variables[lVar.Index];
+            if (leftRuleVar.Type is null && condition.RValue.Type is not null)
+            {
+                leftRuleVar.Type = condition.RValue.Type;
+                lVar.Type = condition.RValue.Type;
+                updated = true;
+            }
+        }
+        if (condition.RValue is IRVariable rVar && rVar.Index < rule.Variables.Count)
+        {
+            var rightRuleVar = rule.Variables[rVar.Index];
+            if (rightRuleVar.Type is null && condition.LValue.Type is not null)
+            {
+                rightRuleVar.Type = condition.LValue.Type;
+                rVar.Type = condition.LValue.Type;
+                updated = true;
+            }
+        }
+
+        return updated;
+    }
+
+    private static int ComputeTupleSize(IRRule rule, IRFuncCondition condition, int lastTupleSize)
+    {
+        _ = rule;
+        ArgumentNullException.ThrowIfNull(condition);
+
+        int tupleSize = lastTupleSize;
         foreach (var param in condition.Params)
         {
-            if (param is IRVariable)
+            if (param is IRVariable { Index: var index })
             {
-                var variable = param as IRVariable;
-                if (variable.Index >= tupleSize)
-                {
-                    tupleSize = variable.Index + 1;
-                }
+                tupleSize = Math.Max(tupleSize, index + 1);
             }
         }
 
         return tupleSize;
     }
 
-    private Int32 ComputeTupleSize(IRRule rule, IRBinaryCondition condition, Int32 lastTupleSize)
+    private static int ComputeTupleSize(IRRule rule, IRBinaryCondition condition, int lastTupleSize)
     {
-        Int32 tupleSize = lastTupleSize;
-        if (condition.LValue is IRVariable)
+        _ = rule;
+        ArgumentNullException.ThrowIfNull(condition);
+
+        int tupleSize = lastTupleSize;
+
+        if (condition.LValue is IRVariable { Index: var lIndex })
         {
-            var variable = condition.LValue as IRVariable;
-            if (variable.Index >= tupleSize)
-            {
-                tupleSize = variable.Index + 1;
-            }
+            tupleSize = Math.Max(tupleSize, lIndex + 1);
         }
 
-        if (condition.RValue is IRVariable)
+        if (condition.RValue is IRVariable { Index: var rIndex })
         {
-            var variable = condition.RValue as IRVariable;
-            if (variable.Index >= tupleSize)
-            {
-                tupleSize = variable.Index + 1;
-            }
+            tupleSize = Math.Max(tupleSize, rIndex + 1);
         }
 
         return tupleSize;
@@ -1127,59 +1163,75 @@ public class Compiler
 
     private bool PropagateRuleTypes(IRRule rule)
     {
+        ArgumentNullException.ThrowIfNull(rule);
         bool updated = false;
 
-        Int32 lastTupleSize = 0;
+        int lastTupleSize = 0;
         foreach (var condition in rule.Conditions)
         {
-            if (condition is IRFuncCondition)
+            if (condition is null) continue;
+
+            int currentTupleSize = condition switch
             {
-                var func = condition as IRFuncCondition;
-                PropagateSignatureIfRequired(rule, func.Func.Name, null, func.Params, false, ref updated);
-                if (func.TupleSize == -1)
+                IRFuncCondition f => f.TupleSize,
+                IRBinaryCondition b => b.TupleSize,
+                _ => -1
+            };
+
+            if (condition is IRFuncCondition func && func.Func is { Name: { } funcNameObj })
+            {
+                _ = PropagateSignatureIfRequired(rule, new(funcNameObj.Name, func.Params.Count), null, func.Params, false, ref updated);
+
+                if (currentTupleSize == -1)
                 {
-                    func.TupleSize = ComputeTupleSize(rule, func, lastTupleSize);
+                    currentTupleSize = ComputeTupleSize(rule, func, lastTupleSize);
+
+                    func.TupleSize = currentTupleSize;
                     updated = true;
                 }
             }
-            else
+            else if (condition is IRBinaryCondition bin)
             {
-                var bin = condition as IRBinaryCondition;
                 if (PropagateRuleTypes(rule, bin))
                 {
                     updated = true;
                 }
 
-                if (bin.TupleSize == -1)
+                if (currentTupleSize == -1)
                 {
-                    bin.TupleSize = ComputeTupleSize(rule, bin, lastTupleSize);
+                    currentTupleSize = ComputeTupleSize(rule, bin, lastTupleSize);
+
+                    bin.TupleSize = currentTupleSize;
                     updated = true;
                 }
             }
 
-            lastTupleSize = condition.TupleSize;
+            lastTupleSize = currentTupleSize;
         }
 
         foreach (var action in rule.Actions)
         {
-            if (action.Func != null)
+            if (action is { Func.Name: { } actionNameObj, Params: var actionParams })
             {
-                PropagateSignatureIfRequired(rule, action.Func.Name, null, action.Params, false, ref updated);
+                _ = PropagateSignatureIfRequired(rule, new(actionNameObj.Name, actionParams.Count), null, actionParams, false, ref updated);
             }
         }
 
         return updated;
     }
 
-    public bool PropagateRuleTypes()
+    public bool PropagateRuleTypes(IEnumerable<IRGoal> goals)
     {
+        ArgumentNullException.ThrowIfNull(goals);
         bool updated = false;
 
-        foreach (var goal in Context.GoalsByName.Values)
+        foreach (var goal in goals)
         {
+            if (goal is null) continue;
+
             foreach (var fact in goal.InitSection)
             {
-                if (PropagateRuleTypes(fact))
+                if (fact is not null && PropagateRuleTypes(fact))
                 {
                     updated = true;
                 }
@@ -1187,7 +1239,7 @@ public class Compiler
 
             foreach (var rule in goal.KBSection)
             {
-                if (PropagateRuleTypes(rule))
+                if (rule is not null && PropagateRuleTypes(rule))
                 {
                     updated = true;
                 }
@@ -1195,7 +1247,7 @@ public class Compiler
 
             foreach (var fact in goal.ExitSection)
             {
-                if (PropagateRuleTypes(fact))
+                if (fact is not null && PropagateRuleTypes(fact))
                 {
                     updated = true;
                 }
@@ -1204,48 +1256,54 @@ public class Compiler
 
         return updated;
     }
-
     private void AddQueryOrProc(IRRule rule)
     {
-        // Check if all parameters in the PROC/QRY declaration are typed.
-        var procDefn = rule.Conditions[0];
-        if (procDefn is IRFuncCondition)
+        ArgumentNullException.ThrowIfNull(rule);
+
+        if (rule.Conditions is { Count: 0 })
         {
-            var def = procDefn as IRFuncCondition;
-            FunctionType type;
-            switch (rule.Type)
+            Context.Log.Error(rule.Location,
+                DiagnosticCode.InvalidProcDefinition,
+                $"Declaration of a {rule.Type} cannot be empty.");
+            return;
+        }
+
+        var procDefn = rule.Conditions[0];
+
+        if (procDefn is IRFuncCondition def && def.Func.Name is { } funcNameObj)
+        {
+            FunctionType type = rule.Type switch
             {
-                case RuleType.Proc: type = FunctionType.Proc; break;
-                case RuleType.Query: type = FunctionType.UserQuery; break;
-                default: throw new InvalidOperationException("Cannot register this type as a PROC or QUERY");
-            }
+                RuleType.Proc => FunctionType.Proc,
+                RuleType.Query => FunctionType.UserQuery,
+                _ => throw new InvalidOperationException("Cannot register this type as a PROC or QUERY configuration mapping.")
+            };
 
             bool updated = false;
-            if (!PropagateSignatureIfRequired(rule, def.Func.Name, type, def.Params, true, ref updated))
+
+            if (!PropagateSignatureIfRequired(rule, new(funcNameObj.Name, def.Params.Count), type, def.Params, allowPartial: true, ref updated))
             {
-                // TODO - possibly a warning?
-                /*Context.Log.Error(procDefn.Location, 
-                    DiagnosticCode.InvalidProcDefinition,
-                    "Signature must be completely typed in declaration of {0} {1}",
-                    rule.Type, def.Func.Name);*/
+                Context.Log.Warn(procDefn.Location,
+                    DiagnosticCode.UnresolvedSignature,
+                    $"Signature could not be completely typed or matched in declaration of {rule.Type} \"{funcNameObj.Name}\"");
             }
         }
         else
         {
-            Context.Log.Error(procDefn.Location, 
+            Context.Log.Error(procDefn.Location,
                 DiagnosticCode.InvalidProcDefinition,
-                "Declaration of a {0} must start with a {0} name and signature.", 
-                rule.Type);
+                $"Declaration of a {rule.Type} must start with a {rule.Type} name and signature.");
         }
     }
 
     public void AddGoal(IRGoal goal)
     {
+        ArgumentNullException.ThrowIfNull(goal);
         Context.RegisterGoal(goal);
         foreach (var rule in goal.KBSection)
         {
-            if (rule.Type == RuleType.Query
-                || rule.Type == RuleType.Proc)
+            if (rule is null) continue;
+            if (rule.Type is RuleType.Query or RuleType.Proc)
             {
                 AddQueryOrProc(rule);
             }

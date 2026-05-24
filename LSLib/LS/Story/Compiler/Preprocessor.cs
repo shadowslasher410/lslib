@@ -1,60 +1,65 @@
 ﻿namespace LSLib.LS.Story.Compiler;
 
-public class Preprocessor
+public sealed class Preprocessor
 {
-    public bool Preprocess(String script, ref String preprocessed)
+    public static bool Preprocess(string script, out string preprocessed)
     {
-        if (script.IndexOf("/* [OSITOOLS_ONLY]", StringComparison.Ordinal) == -1 
-            && script.IndexOf("// [BEGIN_NO_OSITOOLS]", StringComparison.Ordinal) == -1)
+        ArgumentNullException.ThrowIfNull(script);
+
+        if (!script.Contains("/* [OSITOOLS_ONLY]")
+            && !script.Contains("// [BEGIN_NO_OSITOOLS]"))
         {
+            preprocessed = script;
             return false;
         }
 
+        ReadOnlySpan<char> sourceSpan = script.AsSpan();
         var builder = new StringBuilder(script.Length);
-        
+
         int pos = 0;
-        while (pos < script.Length)
+        while (pos < sourceSpan.Length)
         {
-            var next = script.IndexOf("/* [OSITOOLS_ONLY]", pos, StringComparison.Ordinal);
+            int next = script.IndexOf("/* [OSITOOLS_ONLY]", pos, StringComparison.Ordinal);
             if (next == -1)
             {
-                builder.Append(script.Substring(pos));
+                builder.Append(sourceSpan[pos..]);
                 break;
             }
 
-            var end = script.IndexOf("*/", next, StringComparison.Ordinal);
+            int end = script.IndexOf("*/", next, StringComparison.Ordinal);
             if (end == -1)
             {
-                builder.Append(script.Substring(pos));
+                builder.Append(sourceSpan[pos..]);
                 break;
             }
 
-            builder.Append(script.Substring(pos, next - pos));
-            builder.Append(script.Substring(next + 19, end - next - 19));
+            builder.Append(sourceSpan[pos..next]);
+            builder.Append(sourceSpan[(next + 19)..end]);
             pos = end + 2;
         }
 
-        var ph1 = builder.ToString();
+        string ph1 = builder.ToString();
+        ReadOnlySpan<char> ph1Span = ph1.AsSpan();
         var builderPh2 = new StringBuilder(ph1.Length);
 
         pos = 0;
-        while (pos < ph1.Length)
+        while (pos < ph1Span.Length)
         {
             int next = ph1.IndexOf("// [BEGIN_NO_OSITOOLS]", pos, StringComparison.Ordinal);
             if (next == -1)
             {
-                builderPh2.Append(ph1.Substring(pos));
+                builderPh2.Append(ph1Span[pos..]);
                 break;
             }
 
-            var end = ph1.IndexOf("// [END_NO_OSITOOLS]", next, StringComparison.Ordinal);
+            int end = ph1.IndexOf("// [END_NO_OSITOOLS]", next, StringComparison.Ordinal);
             if (end == -1)
             {
-                builderPh2.Append(ph1.Substring(pos));
+                builderPh2.Append(ph1Span[pos..]);
                 break;
             }
 
-            builderPh2.Append(ph1.Substring(pos, next - pos));
+            builderPh2.Append(ph1Span[pos..next]);
             pos = end + 21;
         }
 

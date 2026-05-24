@@ -2,9 +2,9 @@
 
 public class VFSDirectory
 {
-    public string Path;
-    public Dictionary<string, VFSDirectory> Dirs;
-    public Dictionary<string, PackagedFileInfo> Files;
+    public string Path { get; set; } = string.Empty;
+    public Dictionary<string, VFSDirectory>? Dirs { get; set; }
+    public Dictionary<string, PackagedFileInfo>? Files { get; set; }
 
     public VFSDirectory GetOrAddDirectory(string absolutePath, string name)
     {
@@ -12,15 +12,14 @@ public class VFSDirectory
 
         if (!Dirs.TryGetValue(name, out var dir))
         {
-            dir = new VFSDirectory();
-            dir.Path = absolutePath;
+            dir = new VFSDirectory { Path = absolutePath };
             Dirs[name] = dir;
         }
 
         return dir;
     }
 
-    public bool TryGetDirectory(string name, out VFSDirectory dir)
+    public bool TryGetDirectory(string name, out VFSDirectory? dir)
     {
         if (Dirs?.TryGetValue(name, out dir) == true)
         {
@@ -41,7 +40,7 @@ public class VFSDirectory
         }
     }
 
-    public bool TryGetFile(string name, out PackagedFileInfo file)
+    public bool TryGetFile(string name, out PackagedFileInfo? file)
     {
         if (Files?.TryGetValue(name, out file) == true)
         {
@@ -55,24 +54,22 @@ public class VFSDirectory
 
 public class VFS : IDisposable
 {
-    private List<Package> Packages = [];
-    private string RootDir;
-    private VFSDirectory Root = new();
+    private readonly List<Package> _packages = [];
+    private string? _rootDir;
+    private readonly VFSDirectory _root = new();
 
     public void Dispose()
     {
-        Packages.ForEach(p => p.Dispose());
+        GC.SuppressFinalize(this);
+        foreach (var package in _packages)
+        {
+            package.Dispose();
+        }
     }
 
-    public void AttachRoot(string path)
-    {
-        RootDir = path;
-    }
+    public void AttachRoot(string path) => _rootDir = path;
+    public void DetachRoot() => _rootDir = null;
 
-    public void DetachRoot()
-    {
-        RootDir = null;
-    }
 
     public void AttachGameDirectory(string gameDataPath, bool excludeAssets = true, bool loadUnpackedFiles = true)
     {
@@ -115,42 +112,39 @@ public class VFS : IDisposable
             ];
         }
 
-        // Collect priority value from headers
-        var packagePriorities = new List<Tuple<string, int>>();
-
         foreach (var path in Directory.GetFiles(gameDataPath, "*.pak"))
         {
             var baseName = Path.GetFileName(path);
-            if (!packageBlacklist.Contains(baseName)
-                // Don't load 2nd, 3rd, ... parts of a multi-part archive
-                && !ModPathVisitor.archivePartRe.IsMatch(baseName))
+            if (!packageBlacklist.Contains(baseName) && !ModPathVisitor.archivePartRe.IsMatch(baseName)) // Don't load 2nd, 3rd, ... parts of a multi-part archive
             {
                 AttachPackage(path);
             }
         }
 
-        foreach (var path in Directory.GetFiles(Path.Join(gameDataPath, "Localization"), "*.pak"))
+        var localizationDir = Path.Join(gameDataPath, "Localization");
+        if (Directory.Exists(localizationDir))
         {
-            var baseName = Path.GetFileName(path);
-            if (!packageBlacklist.Contains(baseName)
-                // Don't load 2nd, 3rd, ... parts of a multi-part archive
-                && !ModPathVisitor.archivePartRe.IsMatch(baseName))
+            foreach (var path in Directory.GetFiles(localizationDir, "*.pak"))
             {
-                AttachPackage(path);
+                var baseName = Path.GetFileName(path);
+                if (!packageBlacklist.Contains(baseName) && !ModPathVisitor.archivePartRe.IsMatch(baseName))// Don't load 2nd, 3rd, ... parts of a multi-part archive
+                {
+                    AttachPackage(path);
+                }
             }
         }
     }
 
     public void AttachPackage(string path)
     {
-        var reader = new PackageReader();
+        PackageReader reader = new();
         var package = reader.Read(path);
-        Packages.Add(package);
+        _packages.Add(package);
     }
 
     public void FinishBuild()
     {
-        foreach (var package in Packages)
+        foreach (var package in _packages)
         {
             foreach (var file in package.Files)
             {
@@ -161,106 +155,98 @@ public class VFS : IDisposable
 
     private void TryAddFile(PackagedFileInfo file)
     {
-        var path = file.Name;
-        var namePos = 0;
-        var node = Root;
-        do
+        ReadOnlySpan<char> pathSpan = file.Name.AsSpan();
+        var node = _root;
+        int currentPos = 0;
+
+        // Modern Allocation-free deep folder initialization via Span indexing
+        while (currentPos < pathSpan.Length)
         {
-            var endPos = path.IndexOf('/', namePos);
-            if (endPos >= 0)
+            int nextSlash = pathSpan[currentPos..].IndexOf('/');
+            if (nextSlash >= 0)
             {
-                node = node.GetOrAddDirectory(path.Substring(0, endPos), path.Substring(namePos, endPos - namePos));
-                namePos = endPos + 1;
+                int endPos = currentPos + nextSlash;
+                ReadOnlySpan<char> absoluteSegment = pathSpan[..endPos];
+                ReadOnlySpan<char> relativeSegment = pathSpan[currentPos..endPos];
+
+                node = node.GetOrAddDirectory(absoluteSegment.ToString(), relativeSegment.ToString());
+                currentPos = endPos + 1;
             }
             else
             {
-                node.AddFile(path.Substring(namePos), file);
+                node.AddFile(pathSpan[currentPos..].ToString(), file);
                 break;
             }
-        } while (true);
+        }
     }
 
-    public VFSDirectory FindVFSDirectory(string path)
+    public VFSDirectory? FindVFSDirectory(string path)
     {
-        var namePos = 0;
-        var node = Root;
-        do
+        ReadOnlySpan<char> pathSpan = path.AsSpan();
+        var node = _root;
+        int currentPos = 0;
+
+        while (currentPos < pathSpan.Length)
         {
-            var endPos = path.IndexOf('/', namePos);
-            if (endPos >= 0)
+            int nextSlash = pathSpan[currentPos..].IndexOf('/');
+            if (nextSlash >= 0)
             {
-                if (!node.TryGetDirectory(path.Substring(namePos, endPos - namePos), out node))
+                int endPos = currentPos + nextSlash;
+                if (!node.TryGetDirectory(pathSpan[currentPos..endPos].ToString(), out node) || node is null)
                 {
                     return null;
                 }
-
-                namePos = endPos + 1;
+                currentPos = endPos + 1;
             }
             else
             {
-                if (node.TryGetDirectory(path.Substring(namePos), out node))
-                {
-                    return node;
-                }
-                else
-                {
-                    return null;
-                }
+                return node.TryGetDirectory(pathSpan[currentPos..].ToString(), out var targetNode) ? targetNode : null;
             }
-        } while (true);
+        }
+        return node;
     }
 
     public bool DirectoryExists(string path)
     {
-        if (FindVFSDirectory(Canonicalize(path)) != null) return true;
-        return RootDir != null && Directory.Exists(Path.Combine(RootDir, path));
+        if (FindVFSDirectory(Canonicalize(path)) is not null) return true;
+        return _rootDir is not null && Directory.Exists(Path.Combine(_rootDir, path));
     }
 
-    public PackagedFileInfo FindVFSFile(string path)
+    public PackagedFileInfo? FindVFSFile(string path)
     {
-        var namePos = 0;
-        var node = Root;
-        do
+        ReadOnlySpan<char> pathSpan = path.AsSpan();
+        var node = _root;
+        int currentPos = 0;
+
+        while (currentPos < pathSpan.Length)
         {
-            var endPos = path.IndexOf('/', namePos);
-            if (endPos >= 0)
+            int nextSlash = pathSpan[currentPos..].IndexOf('/');
+            if (nextSlash >= 0)
             {
-                if (!node.TryGetDirectory(path.Substring(namePos, endPos - namePos), out node))
+                int endPos = currentPos + nextSlash;
+                if (!node.TryGetDirectory(pathSpan[currentPos..endPos].ToString(), out node) || node is null)
                 {
                     return null;
                 }
-
-                namePos = endPos + 1;
+                currentPos = endPos + 1;
             }
             else
             {
-                if (node.TryGetFile(path.Substring(namePos), out var file))
-                {
-                    return file;
-                }
-                else
-                {
-                    return null;
-                }
+                return node.TryGetFile(pathSpan[currentPos..].ToString(), out var file) ? file : null;
             }
-        } while (true);
+        }
+        return null;
     }
 
-    public string Canonicalize(string path)
-    {
-        return path.Replace('\\', '/');
-    }
+    public static string Canonicalize(string path) => path.Replace('\\', '/');
 
     public bool FileExists(string path)
     {
-        if (FindVFSFile(Canonicalize(path)) != null) return true;
-        return RootDir != null && File.Exists(Path.Combine(RootDir, path));
+        if (FindVFSFile(Canonicalize(path)) is not null) return true;
+        return _rootDir is not null && File.Exists(Path.Combine(_rootDir, path));
     }
 
-    public List<string> EnumerateFiles(string path, bool recursive = false)
-    {
-        return EnumerateFiles(path, recursive, (path) => true);
-    }
+    public List<string> EnumerateFiles(string path, bool recursive = false) => EnumerateFiles(path, recursive, _ => true);
 
     public List<string> EnumerateFiles(string path, bool recursive, Func<string, bool> filter)
     {
@@ -272,22 +258,37 @@ public class VFS : IDisposable
     public void EnumerateFiles(List<string> results, string path, bool recursive, Func<string, bool> filter)
     {
         var dir = FindVFSDirectory(Canonicalize(path));
-        if (dir != null)
+
+        if (dir?.Files is not null)
         {
-            EnumerateFiles(results, dir, recursive, filter);
+            foreach (var file in dir.Files.Values)
+            {
+                if (filter(file.Name))
+                {
+                    results.Add(file.Name);
+                }
+            }
         }
 
-        if (RootDir != null)
+        if (recursive && dir?.Dirs is not null)
         {
-            var fsDir = Path.Join(RootDir, path);
+            foreach (var subDir in dir.Dirs.Values)
+            {
+                EnumerateFiles(results, subDir.Path, true, filter);
+            }
+        }
+
+        if (_rootDir is not null)
+        {
+            var fsDir = Path.Join(_rootDir, path);
             if (Directory.Exists(fsDir))
             {
-                var files = Directory.EnumerateFiles(fsDir, "*", recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly);
-                foreach (var file in files)
+                var option = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+                foreach (var file in Directory.EnumerateFiles(fsDir, "*", option))
                 {
                     if (filter(file))
                     {
-                        results.Add(Path.GetRelativePath(RootDir, file));
+                        results.Add(Path.GetRelativePath(_rootDir, file));
                     }
                 }
             }
@@ -304,71 +305,69 @@ public class VFS : IDisposable
     public void EnumerateDirectories(List<string> results, string path)
     {
         var dir = FindVFSDirectory(Canonicalize(path));
-        if (dir?.Dirs != null)
+        if (dir?.Dirs is not null)
         {
-            foreach (var subdir in dir.Dirs)
+            foreach (var subdir in dir.Dirs.Values)
             {
-                results.Add(subdir.Value.Path);
+                results.Add(subdir.Path);
             }
         }
 
-        if (RootDir != null)
+        if (_rootDir is not null)
         {
-            var fsDir = Path.Join(RootDir, path);
+            var fsDir = Path.Join(_rootDir, path);
             if (Directory.Exists(fsDir))
             {
                 foreach (var subdir in Directory.EnumerateDirectories(fsDir))
                 {
-                    results.Add(Path.GetRelativePath(RootDir, subdir));
+                    results.Add(Path.GetRelativePath(_rootDir, subdir));
                 }
             }
         }
     }
 
-    private void EnumerateFiles(List<string> results, VFSDirectory dir, bool recursive, Func<string, bool> filter)
+    private static void EnumerateFiles(List<string> results, VFSDirectory dir, bool recursive, Func<string, bool> filter)
     {
-        if (dir.Files != null)
+        if (dir.Files is not null)
         {
-            foreach (var file in dir.Files)
+            foreach (var file in dir.Files.Values)
             {
-                if (!file.Value.IsDeletion() && filter(file.Key))
+                if (!file.IsDeletion() && filter(file.Name))
                 {
-                    results.Add(file.Value.Name);
+                    results.Add(file.Name);
                 }
             }
         }
 
-        if (recursive && dir.Dirs != null)
+        if (recursive && dir.Dirs is not null)
         {
-            foreach (var subdir in dir.Dirs)
+            foreach (var subdir in dir.Dirs.Values)
             {
-                EnumerateFiles(results, subdir.Value, recursive, filter);
+                EnumerateFiles(results, subdir, recursive, filter);
             }
         }
     }
 
-    public bool TryOpenFromVFS(string path, out Stream stream)
+    public bool TryOpenFromVFS(string path, out Stream? stream)
     {
         var file = FindVFSFile(Canonicalize(path));
-        if (file != null && !file.IsDeletion())
+        if (file is not null && !file.IsDeletion())
         {
             stream = file.CreateContentReader();
             return true;
         }
-        else
-        {
-            stream = null;
-            return false;
-        }
+
+        stream = null;
+        return false;
     }
 
-    public bool TryOpen(string path, out Stream stream)
+    public bool TryOpen(string path, out Stream? stream)
     {
         if (TryOpenFromVFS(path, out stream)) return true;
 
-        if (RootDir != null)
+        if (_rootDir is not null)
         {
-            var realPath = Path.Join(RootDir, path);
+            var realPath = Path.Join(_rootDir, path);
             if (File.Exists(realPath))
             {
                 stream = File.OpenRead(realPath);
@@ -382,7 +381,7 @@ public class VFS : IDisposable
 
     public Stream Open(string path)
     {
-        if (!TryOpen(path, out var stream))
+        if (!TryOpen(path, out var stream) || stream is null)
         {
             throw new FileNotFoundException($"File not found in VFS: {path}", path);
         }

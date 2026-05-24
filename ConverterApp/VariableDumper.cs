@@ -1,52 +1,53 @@
 ﻿using LSLib.LS;
 using LSLib.LS.Save;
-using System;
-using System.IO;
-using System.Linq;
 using System.Text;
 
-namespace ConverterApp;
+namespace LSTools.DivineGUI;
 
-class VariableDumper : IDisposable
+public sealed class VariableDumper : IDisposable
 {
-    private StreamWriter Writer;
-    private Resource Rsrc;
-    private OsirisVariableHelper VariablesHelper;
+    private readonly StreamWriter _writer;
+    private Resource? _rsrc;
+    private OsirisVariableHelper? _variablesHelper;
 
-    public bool IncludeDeletedVars { get; set; }
-    public bool IncludeLocalScopes { get; set; }
+    public bool IncludeDeletedVars { get; set; } = false;
+    public bool IncludeLocalScopes { get; set; } = false;
 
     public VariableDumper(Stream outputStream)
     {
-        Writer = new StreamWriter(outputStream, Encoding.UTF8);
-        IncludeDeletedVars = false;
-        IncludeLocalScopes = false;
+        ArgumentNullException.ThrowIfNull(outputStream);
+        _writer = new StreamWriter(outputStream, Encoding.UTF8);
     }
 
-    public void Dispose()
-    {
-        Writer.Dispose();
-    }
+    public void Dispose() => _writer.Dispose();
 
     private void DumpCharacter(Node characterNode)
     {
-        if (characterNode.Children.TryGetValue("VariableManager", out var varNodes))
+        ArgumentNullException.ThrowIfNull(_variablesHelper);
+
+        if (characterNode.Children.TryGetValue("VariableManager", out var varNodes) && varNodes.Count > 0)
         {
-            var characterVars = new VariableManager(VariablesHelper);
+            var characterVars = new VariableManager(_variablesHelper);
             characterVars.Load(varNodes[0]);
 
-            var key = characterNode.Attributes["CurrentTemplate"].Value.ToString();
-            if (characterNode.Attributes.ContainsKey("Stats"))
+            string key = characterNode.Attributes.TryGetValue("CurrentTemplate", out var templateAttr) && templateAttr.Value is not null
+                ? templateAttr.Value.ToString() ?? string.Empty
+                : string.Empty;
+
+            if (characterNode.Attributes.TryGetValue("Stats", out var statsAttr))
             {
-                key += " (" + (string)characterNode.Attributes["Stats"].Value + ")";
+                key = $"{key} ({statsAttr.Value})";
             }
-            else if (characterNode.Children.ContainsKey("PlayerData"))
+            else if (characterNode.Children.TryGetValue("PlayerData", out var playerDataList) && playerDataList.Count > 0)
             {
-                var playerData = characterNode.Children["PlayerData"][0]
-                    .Children["PlayerCustomData"][0];
-                if (playerData.Attributes.TryGetValue("Name", out NodeAttribute name))
+                var playerDataNode = playerDataList[0];
+                if (playerDataNode.Children.TryGetValue("PlayerCustomData", out var customDataList) && customDataList.Count > 0)
                 {
-                    key += " (Player " + (string)name.Value + ")";
+                    var customData = customDataList[0];
+                    if (customData.Attributes.TryGetValue("Name", out var nameAttr))
+                    {
+                        key = $"{key} (Player {nameAttr.Value})";
+                    }
                 }
             }
 
@@ -56,15 +57,20 @@ class VariableDumper : IDisposable
 
     private void DumpItem(Node itemNode)
     {
-        if (itemNode.Children.TryGetValue("VariableManager", out var varNodes))
+        ArgumentNullException.ThrowIfNull(_variablesHelper);
+
+        if (itemNode.Children.TryGetValue("VariableManager", out var varNodes) && varNodes.Count > 0)
         {
-            var itemVars = new VariableManager(VariablesHelper);
+            var itemVars = new VariableManager(_variablesHelper);
             itemVars.Load(varNodes[0]);
 
-            var key = itemNode.Attributes["CurrentTemplate"].Value.ToString();
-            if (itemNode.Attributes.ContainsKey("Stats"))
+            string key = itemNode.Attributes.TryGetValue("CurrentTemplate", out var templateAttr) && templateAttr.Value is not null
+                ? templateAttr.Value.ToString() ?? string.Empty
+                : string.Empty;
+
+            if (itemNode.Attributes.TryGetValue("Stats", out var statsAttr))
             {
-                key += " (" + (string)itemNode.Attributes["Stats"].Value + ")";
+                key = $"{key} ({statsAttr.Value})";
             }
 
             DumpVariables(key, itemVars);
@@ -73,63 +79,93 @@ class VariableDumper : IDisposable
 
     private void DumpGlobals(Node globalVarsNode)
     {
-        var vars = new VariableManager(VariablesHelper);
+        ArgumentNullException.ThrowIfNull(_variablesHelper);
+
+        var vars = new VariableManager(_variablesHelper);
         vars.Load(globalVarsNode);
         DumpVariables("Globals", vars);
     }
 
     private void DumpVariables(string label, VariableManager variableMgr)
     {
-        var variables = variableMgr.GetAll(IncludeDeletedVars);
+        var baseVars = variableMgr.GetAll(IncludeDeletedVars);
+        var filteredVars = new List<KeyValuePair<string, object>>();
 
-        if (!IncludeLocalScopes)
+        if (baseVars is System.Collections.IEnumerable enumerableVars)
         {
-            variables = variables
-                .Where(kv => !kv.Key.Contains('.'))
-                .ToDictionary(kv => kv.Key, kv => kv.Value);
+            var enumerator = enumerableVars.GetEnumerator();
+            try
+            {
+                while (enumerator.MoveNext())
+                {
+                    if (enumerator.Current is KeyValuePair<string, object> kv)
+                    {
+                        if (!IncludeLocalScopes && kv.Key.Contains('.'))
+                        {
+                            continue;
+                        }
+                        filteredVars.Add(kv);
+                    }
+                }
+            }
+            finally
+            {
+                if (enumerator is IDisposable disposable)
+                {
+                    disposable.Dispose();
+                }
+            }
         }
 
-        if (variables.Count > 0)
+        if (filteredVars.Count > 0)
         {
-            Writer.WriteLine($"{label}:");
-            foreach (var kv in variables)
+            _writer.Write($"{label}:\n");
+            foreach (var kv in filteredVars)
             {
-                Writer.WriteLine($"\t{kv.Key}: {kv.Value}");
+                _writer.Write($"\t{kv.Key}: {kv.Value}\n");
             }
-
-            Writer.WriteLine("");
+            _writer.Write("\n");
         }
     }
 
     public bool Load(Resource resource)
     {
-        Rsrc = resource;
-        Node osiHelper = resource.Regions["OsirisVariableHelper"];
-        if (!osiHelper.Children.ContainsKey("IdentifierTable"))
+        _rsrc = resource;
+
+        if (!resource.Regions.TryGetValue("OsirisVariableHelper", out var osiHelper) ||
+            !osiHelper.Children.ContainsKey("IdentifierTable"))
         {
             return false;
         }
 
-        VariablesHelper = new OsirisVariableHelper();
-        VariablesHelper.Load(osiHelper);
+        _variablesHelper = new OsirisVariableHelper();
+        _variablesHelper.Load(osiHelper);
         return true;
     }
 
     public void DumpGlobals()
     {
-        Node osiHelper = Rsrc.Regions["OsirisVariableHelper"];
-        var globalVarsNode = osiHelper.Children["VariableManager"][0];
+        ArgumentNullException.ThrowIfNull(_rsrc);
 
-        Writer.WriteLine(" === DUMP OF GLOBALS === ");
-        DumpGlobals(globalVarsNode);
+        if (!_rsrc.Regions.TryGetValue("OsirisVariableHelper", out var osiHelper)) return;
+        if (!osiHelper.Children.TryGetValue("VariableManager", out var varManagerList) || varManagerList.Count == 0) return;
+
+        _writer.Write(" === DUMP OF GLOBALS === \n");
+        DumpGlobals(varManagerList[0]);
     }
 
     public void DumpCharacters()
     {
-        Writer.WriteLine();
-        Writer.WriteLine(" === DUMP OF CHARACTERS === ");
-        var characters = Rsrc.Regions["Characters"].Children["CharacterFactory"][0].Children["Characters"][0].Children["Character"];
-        foreach (var character in characters)
+        ArgumentNullException.ThrowIfNull(_rsrc);
+
+        _writer.Write("\n === DUMP OF CHARACTERS === \n");
+
+        if (!_rsrc.Regions.TryGetValue("Characters", out var charactersRegion)) return;
+        if (!charactersRegion.Children.TryGetValue("CharacterFactory", out var factoryList) || factoryList.Count == 0) return;
+        if (!factoryList[0].Children.TryGetValue("Characters", out var containerList) || containerList.Count == 0) return;
+        if (!containerList[0].Children.TryGetValue("Character", out var charactersList)) return;
+
+        foreach (var character in charactersList)
         {
             DumpCharacter(character);
         }
@@ -137,10 +173,16 @@ class VariableDumper : IDisposable
 
     public void DumpItems()
     {
-        Writer.WriteLine();
-        Writer.WriteLine(" === DUMP OF ITEMS === ");
-        var items = Rsrc.Regions["Items"].Children["ItemFactory"][0].Children["Items"][0].Children["Item"];
-        foreach (var item in items)
+        ArgumentNullException.ThrowIfNull(_rsrc);
+
+        _writer.Write("\n === DUMP OF ITEMS === \n");
+
+        if (!_rsrc.Regions.TryGetValue("Items", out var itemsRegion)) return;
+        if (!itemsRegion.Children.TryGetValue("ItemFactory", out var factoryList) || factoryList.Count == 0) return;
+        if (!factoryList[0].Children.TryGetValue("Items", out var containerList) || containerList.Count == 0) return;
+        if (!containerList[0].Children.TryGetValue("Item", out var itemsList)) return;
+
+        foreach (var item in itemsList)
         {
             DumpItem(item);
         }

@@ -1,0 +1,87 @@
+<rxui:ReactiveUserControl xmlns="https://github.com/avaloniaui"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         xmlns:views="using:LSTools.DivineGUI"
+                         xmlns:rxui="clr-namespace:Avalonia.ReactiveUI;assembly=Avalonia.ReactiveUI"
+                         x:Class="LSTools.DivineGUI.PackagePane"
+                         x:DataType="views:PackagePane">
+
+	<Grid RowDefinitions="Auto,Auto,*,Auto" Margin="16" RowSpacing="12">
+
+		<HeaderedContentControl Grid.Row="0" Header="Extract Package" Theme="{StaticResource GroupBoxTheme}">
+			<Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnDefinitions="*,Auto" Margin="12" RowSpacing="6" ColumnSpacing="8">
+				<TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Text="Package path:" />
+				<TextBox Grid.Row="1" Grid.Column="0" Text="{Binding ExtractPackagePath}" PlaceholderText="Select input package or savegame (.pak, .lsv) file..." VerticalAlignment="Center" />
+				<Button Grid.Row="1" Grid.Column="1" Content="..." Width="50" Command="{Binding BrowseExtractPackageCommand}" />
+
+				<TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Text="Destination path:" />
+				<TextBox Grid.Row="3" Grid.Column="0" Text="{Binding ExtractionPath}" PlaceholderText="Select target folder for extracted package contents..." VerticalAlignment="Center" />
+				<Button Grid.Row="3" Grid.Column="1" Content="..." Width="50" Command="{Binding BrowseExtractFolderCommand}" />
+
+				<Button Grid.Row="4" Grid.Column="1" Content="Extract Package" Command="{Binding ExtractPackageCommand}" Theme="{StaticResource AccentButtonTheme}" Margin="0,6,0,0" />
+			</Grid>
+		</HeaderedContentControl>
+
+		<HeaderedContentControl Grid.Row="1" Header="Create Package" Theme="{StaticResource GroupBoxTheme}">
+			<Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" ColumnDefinitions="*,Auto" Margin="12" RowSpacing="6" ColumnSpacing="8">
+				<TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Text="Source path:" />
+				<TextBox Grid.Row="1" Grid.Column="0" Text="{Binding CreateSrcPath}" PlaceholderText="Select directory containing assets to pack..." />
+				<Button Grid.Row="1" Grid.Column="1" Content="..." Width="50" Command="{Binding BrowseCreateSrcCommand}" />
+
+				<TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Text="Package path:" />
+				<TextBox Grid.Row="3" Grid.Column="0" Text="{Binding CreatePackagePath}" PlaceholderText="Select target output file path location..." >
+					<Interaction.Behaviors>
+						<EventTriggerBehavior EventName="LostFocus">
+							<InvokeCommandAction Command="{Binding ValidatePackagePathCommand}" />
+						</EventTriggerBehavior>
+					</Interaction.Behaviors>
+				</TextBox>
+				<Button Grid.Row="3" Grid.Column="1" Content="..." Width="50" Command="{Binding BrowseCreatePackageTargetCommand}" />
+
+				<Grid Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,4,0,0"
+                      RowDefinitions="Auto,Auto" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto"
+                      RowSpacing="8" ColumnSpacing="12" VerticalAlignment="Center">
+
+					<TextBlock Grid.Row="0" Grid.Column="0" Text="Version:" VerticalAlignment="Center"/>
+					<ComboBox Grid.Row="0" Grid.Column="1" Width="325" ItemsSource="{Binding AvailableVersions}" SelectedItem="{Binding SelectedVersion}" />
+
+					<TextBlock Grid.Row="1" Grid.Column="0" Text="Compression:" VerticalAlignment="Center"/>
+					<ComboBox Grid.Row="1" Grid.Column="1" Width="160" ItemsSource="{Binding AvailableCompressions}" SelectedItem="{Binding SelectedCompression}" />
+
+					<TextBlock Grid.Row="0" Grid.Column="2" Text="Priority:" VerticalAlignment="Center" Margin="10,0,0,0"/>
+					<NumericUpDown Grid.Row="0" Grid.Column="3" Value="{Binding PackagePriority}" Minimum="0" Maximum="255" Increment="1" Width="95" VerticalAlignment="Center"/>
+
+					<CheckBox Grid.Row="0" Grid.Column="4" Content="Solid" IsChecked="{Binding IsSolid}" Margin="10,0,0,0"/>
+					<CheckBox Grid.Row="0" Grid.Column="5" Content="Preload into cache" IsChecked="{Binding PreloadIntoCache}" IsVisible="False" />
+					<CheckBox Grid.Row="1" Grid.Column="4" Content="Allow memory mapping" IsChecked="{Binding AllowMemoryMapping}" IsVisible="False" Grid.ColumnSpan="2" Margin="10,0,0,0" />
+				</Grid>
+
+				<Button Grid.Row="5" Grid.Column="1" Content="Create Package" Command="{Binding CreatePackageCommand}" Theme="{StaticResource AccentButtonTheme}" Margin="0,8,0,0" />
+			</Grid>
+		</HeaderedContentControl>
+
+		<DataGrid Grid.Row="2"
+                  ItemsSource="{Binding PackageFilesQueue}"
+                  AutoGenerateColumns="False"
+                  IsReadOnly="True"
+                  GridLinesVisibility="All"
+                  BorderThickness="1"
+                  BorderBrush="{DynamicResource SystemControlTransientBorderBrush}">
+			<DataGrid.Columns>
+				<DataGridTextColumn Header="File Name / Relative Path" Binding="{Binding RelativePath}" Width="3*" />
+				<DataGridTextColumn Header="Size (Bytes)" Binding="{Binding Size}" Width="120" />
+				<DataGridTextColumn Header="Compression" Binding="{Binding Method}" Width="120" />
+				<DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="120" />
+			</DataGrid.Columns>
+		</DataGrid>
+
+		<Grid Grid.Row="3" RowDefinitions="Auto,Auto" RowSpacing="6">
+			<Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,*,Auto">
+				<TextBlock Grid.Column="0" Text="Progress: " FontWeight="SemiBold"/>
+				<TextBlock Grid.Column="1" Text="{Binding PackageProgressLabel}" />
+				<TextBlock Grid.Column="3" Text="{Binding PackageProgressValue, StringFormat={}{0:0}%}" />
+			</Grid>
+			<ProgressBar Grid.Row="1" Value="{Binding PackageProgressValue}" Minimum="0" Maximum="100" Height="16" />
+		</Grid>
+
+	</Grid>
+</rxui:ReactiveUserControl>

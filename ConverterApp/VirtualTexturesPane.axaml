@@ -1,0 +1,78 @@
+<rxui:ReactiveUserControl xmlns="https://github.com/avaloniaui"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         xmlns:views="using:LSTools.DivineGUI"
+                         xmlns:rxui="clr-namespace:Avalonia.ReactiveUI;assembly=Avalonia.ReactiveUI"
+                         x:Class="LSTools.DivineGUI.VirtualTexturesPane"
+                         x:DataType="views:VirtualTexturesPane">
+
+	<Grid RowDefinitions="Auto,Auto,*,Auto" Margin="16" RowSpacing="12">
+
+		<HeaderedContentControl Grid.Row="0" Header="Extract Virtual Textures" Theme="{StaticResource GroupBoxTheme}">
+			<Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto"
+                  ColumnDefinitions="*,Auto"
+                  Margin="12"
+                  RowSpacing="6"
+                  ColumnSpacing="8">
+
+				<TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Text="Tileset (GTS) path:" />
+				<TextBox Grid.Row="1" Grid.Column="0" Text="{Binding GtsPath}" PlaceholderText="Select Virtual Texture Tileset (.gts) file..." VerticalAlignment="Center" />
+				<Button Grid.Row="1" Grid.Column="1" Content="..." Width="50" Command="{Binding BrowseGtsCommand}" />
+
+				<TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Text="Destination path:" />
+				<TextBox Grid.Row="3" Grid.Column="0" Text="{Binding DestinationPath}" PlaceholderText="Select target texture extraction folder..." VerticalAlignment="Center" />
+				<Button Grid.Row="3" Grid.Column="1" Content="..." Width="50" Command="{Binding BrowseDestinationCommand}" />
+
+				<TextBlock Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2" Text="GTex Name: (leave empty to extract all textures)" Margin="0,4,0,0" />
+				<TextBox Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2" Text="{Binding GTexNameInput}" PlaceholderText="Optional extraction name filter..." />
+
+				<Button Grid.Row="6" Grid.Column="1" Content="Extract Textures" Command="{Binding ExtractTileSetCommand}" Theme="{StaticResource AccentButtonTheme}" Margin="0,6,0,0" />
+			</Grid>
+		</HeaderedContentControl>
+
+		<HeaderedContentControl Grid.Row="1" Header="Build Tile Set" Theme="{StaticResource GroupBoxTheme}">
+			<Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                  ColumnDefinitions="*,Auto"
+                  Margin="12"
+                  RowSpacing="6"
+                  ColumnSpacing="8">
+
+				<TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Text="Tile Set Configuration:" />
+				<TextBox Grid.Row="1" Grid.Column="0" Text="{Binding TileSetConfigPath}" PlaceholderText="Select Virtual Texture Set Configuration (.xml) file..." />
+				<Button Grid.Row="1" Grid.Column="1" Content="..." Width="50" Command="{Binding BrowseConfigCommand}" />
+
+				<TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Text="Mod root path:" />
+				<TextBox Grid.Row="3" Grid.Column="0" Text="{Binding ModRootPath}" PlaceholderText="Select targeted build runtime folder location..." />
+				<Button Grid.Row="3" Grid.Column="1" Content="..." Width="50" Command="{Binding BrowseModRootCommand}" />
+
+				<Grid Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,6,0,0" ColumnDefinitions="Auto,*,Auto" VerticalAlignment="Center">
+					<CheckBox Grid.Column="0" Content="Fast Build" IsChecked="{Binding FastBuild}" />
+					<Button Grid.Column="2" Content="Build" Command="{Binding BuildTileSetCommand}" Width="120" Theme="{StaticResource AccentButtonTheme}" />
+				</Grid>
+			</Grid>
+		</HeaderedContentControl>
+		<DataGrid Grid.Row="2"
+                  ItemsSource="{Binding TexturesList}"
+                  AutoGenerateColumns="False"
+                  IsReadOnly="True"
+                  GridLinesVisibility="All"
+                  BorderThickness="1"
+                  BorderBrush="{DynamicResource SystemControlTransientBorderBrush}">
+			<DataGrid.Columns>
+				<DataGridTextColumn Header="Texture Name" Binding="{Binding Name}" Width="*" />
+				<DataGridTextColumn Header="Format" Binding="{Binding Format}" Width="100" />
+				<DataGridTextColumn Header="Dimensions" Binding="{Binding Dimensions}" Width="120" />
+				<DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="120" />
+			</DataGrid.Columns>
+		</DataGrid>
+
+		<Grid Grid.Row="3" RowDefinitions="Auto,Auto" RowSpacing="6">
+			<Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,*,Auto">
+				<TextBlock Grid.Column="0" Text="Progress: " FontWeight="SemiBold"/>
+				<TextBlock Grid.Column="1" Text="{Binding ActionProgressLabel}" />
+				<TextBlock Grid.Column="3" Text="{Binding ActionProgressValue, StringFormat={}{0:0}%}" />
+			</Grid>
+			<ProgressBar Grid.Row="1" Value="{Binding ActionProgressValue}" Minimum="0" Maximum="100" Height="16" />
+		</Grid>
+
+	</Grid>
+</rxui:ReactiveUserControl>

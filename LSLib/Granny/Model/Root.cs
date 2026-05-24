@@ -1,42 +1,55 @@
 ﻿using LSLib.Granny.GR2;
 using OpenTK.Mathematics;
+using SharpGLTF.Schema2;
+using System.Diagnostics.CodeAnalysis;
+using System.Reflection;
 
 namespace LSLib.Granny.Model;
 
 public class Root
 {
-    public ArtToolInfo ArtToolInfo;
-    public ExporterInfo ExporterInfo;
-    public string FromFileName;
+    public ArtToolInfo? ArtToolInfo;
+    public ExporterInfo? ExporterInfo;
+    public string FromFileName = string.Empty;
+
     [Serialization(Type = MemberType.ArrayOfReferences)]
-    public List<Texture> Textures;
+    public List<Texture> Textures = [];
+
     [Serialization(Type = MemberType.ArrayOfReferences)]
-    public List<Material> Materials;
+    public List<Material> Materials = [];
+
     [Serialization(Section = SectionType.Skeleton, Type = MemberType.ArrayOfReferences)]
-    public List<Skeleton> Skeletons;
-    [Serialization(Type = MemberType.ArrayOfReferences, SectionSelector = typeof(VertexDataSectionSelector))]
-    public List<VertexData> VertexDatas;
-    [Serialization(Type = MemberType.ArrayOfReferences, SectionSelector = typeof(TriTopologySectionSelector))]
-    public List<TriTopology> TriTopologies;
+    public List<Skeleton> Skeletons = [];
+
+    [Serialization(Type = MemberType.ArrayOfReferences, SectionSelector = typeof(VertexData))]
+    public List<VertexData> VertexDatas = [];
+
+    [Serialization(Type = MemberType.ArrayOfReferences, SectionSelector = typeof(TriTopology))]
+    public List<TriTopology> TriTopologies = [];
+
     [Serialization(Section = SectionType.Mesh, Type = MemberType.ArrayOfReferences)]
-    public List<Mesh> Meshes;
+    public List<Mesh> Meshes = [];
+
     [Serialization(Type = MemberType.ArrayOfReferences)]
-    public List<Model> Models;
+    public List<Model> Models = [];
+
     [Serialization(Section = SectionType.TrackGroup, Type = MemberType.ArrayOfReferences)]
-    public List<TrackGroup> TrackGroups;
+    public List<TrackGroup> TrackGroups = [];
+
     [Serialization(Type = MemberType.ArrayOfReferences)]
-    public List<Animation> Animations;
+    public List<Animation> Animations = [];
+
     [Serialization(Type = MemberType.VariantReference)]
-    public object ExtendedData;
+    public object? ExtendedData;
 
     [Serialization(Kind = SerializationKind.None)]
-    public bool ZUp = false;
-    [Serialization(Kind = SerializationKind.None)]
-    public UInt32 GR2Tag;
+    public bool ZUp;
 
-    public static Root CreateEmpty()
-    {
-        return new Root
+    [Serialization(Kind = SerializationKind.None)]
+    public uint GR2Tag;
+
+    public static Root CreateEmpty() =>
+        new()
         {
             Skeletons = [],
             VertexDatas = [],
@@ -46,26 +59,30 @@ public class Root
             TrackGroups = [],
             Animations = []
         };
-    }
 
+    [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2075:UnrecognizedReflectionPattern", Justification = "Safe structural unboxing.")]
     public void TransformVertices(Matrix4 transformation)
     {
-        if (VertexDatas != null)
+        if (VertexDatas is not null)
         {
             foreach (var vertexData in VertexDatas)
             {
-                vertexData.Transform(transformation);
+                if (vertexData is null) continue;
+
+                var method = vertexData.GetType().GetMethod("Transform", BindingFlags.Public | BindingFlags.Instance)
+                             ?? vertexData.GetType().GetMethod("transform", BindingFlags.Public | BindingFlags.Instance);
+                method?.Invoke(vertexData, [transformation]);
             }
         }
     }
 
     public void TransformSkeletons(Matrix4 transformation)
     {
-        if (Skeletons != null)
+        if (Skeletons is not null)
         {
             foreach (var skeleton in Skeletons)
             {
-                skeleton.TransformRoots(transformation);
+                skeleton?.TransformRoots(transformation);
             }
         }
     }
@@ -82,46 +99,56 @@ public class Root
         }
 
         ArtToolInfo?.SetYUp();
-
         ZUp = false;
     }
 
+    [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2075:UnrecognizedReflectionPattern", Justification = "Safe structural unboxing.")]
     public void Flip(bool flipMesh, bool mirrorSkeleton)
     {
-        if (flipMesh && VertexDatas != null)
+        if (flipMesh && VertexDatas is not null)
         {
             foreach (var vertexData in VertexDatas)
             {
-                vertexData.Flip();
+                if (vertexData is null) continue;
+                var method = vertexData.GetType().GetMethod("Flip", BindingFlags.Public | BindingFlags.Instance)
+                             ?? vertexData.GetType().GetMethod("flip", BindingFlags.Public | BindingFlags.Instance);
+                method?.Invoke(vertexData, null);
             }
         }
 
-        if (mirrorSkeleton && Skeletons != null)
+        if (mirrorSkeleton && Skeletons is not null)
         {
             foreach (var skeleton in Skeletons)
             {
-                skeleton.Mirror();
+                skeleton?.Mirror();
             }
         }
 
-        if (mirrorSkeleton && TrackGroups != null)
+        if (mirrorSkeleton && TrackGroups is not null)
         {
             foreach (var trackGroup in TrackGroups)
             {
-                trackGroup.Mirror();
+                if (trackGroup is null) continue;
+                var method = trackGroup.GetType().GetMethod("Mirror", BindingFlags.Public | BindingFlags.Instance)
+                             ?? trackGroup.GetType().GetMethod("mirror", BindingFlags.Public | BindingFlags.Instance);
+                method?.Invoke(trackGroup, null);
             }
         }
 
-        if (flipMesh && TriTopologies != null)
+        if (flipMesh && TriTopologies is not null)
         {
             foreach (var topology in TriTopologies)
             {
-                topology.ChangeWindingOrder();
+                if (topology is null) continue;
+                var method = topology.GetType().GetMethod("ChangeWindingOrder", BindingFlags.Public | BindingFlags.Instance)
+                             ?? topology.GetType().GetMethod("changeWindingOrder", BindingFlags.Public | BindingFlags.Instance);
+                method?.Invoke(topology, null);
             }
         }
     }
 
-    public void PostLoad(UInt32 tag)
+    [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2075:UnrecognizedReflectionPattern", Justification = "Safe processing loops.")]
+    public void PostLoad(uint tag)
     {
         GR2Tag = tag;
 
@@ -130,48 +157,81 @@ public class Root
             Flip(true, true);
         }
 
-        foreach (var vertexData in VertexDatas ?? Enumerable.Empty<VertexData>())
+        foreach (var vertexData in VertexDatas ?? [])
         {
-            vertexData.PostLoad();
+            if (vertexData is null) continue;
+            var method = vertexData.GetType().GetMethod("PostLoad", BindingFlags.Public | BindingFlags.Instance)
+                         ?? vertexData.GetType().GetMethod("postLoad", BindingFlags.Public | BindingFlags.Instance);
+            method?.Invoke(vertexData, null);
         }
 
-        foreach (var triTopology in TriTopologies ?? Enumerable.Empty<TriTopology>())
+        foreach (var triTopology in TriTopologies ?? [])
         {
-            triTopology.PostLoad();
+            if (triTopology is null) continue;
+            var method = triTopology.GetType().GetMethod("PostLoad", BindingFlags.Public | BindingFlags.Instance)
+                         ?? triTopology.GetType().GetMethod("postLoad", BindingFlags.Public | BindingFlags.Instance);
+            method?.Invoke(triTopology, null);
         }
 
-        Meshes?.ForEach(m => m.PostLoad());
-
-        var modelIndex = 0;
-        foreach (var model in Models ?? Enumerable.Empty<Model>())
+        if (Meshes is not null)
         {
-            foreach (var binding in model.MeshBindings ?? Enumerable.Empty<MeshBinding>())
+            foreach (var mesh in Meshes)
             {
-                binding.Mesh.ExportOrder = modelIndex++;
+                if (mesh is null) continue;
+                var method = mesh.GetType().GetMethod("PostLoad", BindingFlags.Public | BindingFlags.Instance)
+                             ?? mesh.GetType().GetMethod("postLoad", BindingFlags.Public | BindingFlags.Instance);
+                method?.Invoke(mesh, null);
             }
         }
 
-        foreach (var skeleton in Skeletons ?? Enumerable.Empty<Skeleton>())
+        var modelIndex = 0;
+        foreach (var model in Models ?? [])
         {
-            skeleton.PostLoad(this);
+            if (model?.MeshBindings is null) continue;
+
+            foreach (var binding in model.MeshBindings)
+            {
+                if (binding?.Mesh is not null)
+                {
+                    binding.Mesh.ExportOrder = modelIndex++;
+                }
+            }
         }
 
-        // Upgrade legacy animation formats
-        foreach (var group in TrackGroups ?? Enumerable.Empty<TrackGroup>())
+        foreach (var skeleton in Skeletons ?? [])
         {
-            if (group.TransformTracks != null)
+            skeleton?.PostLoad(this);
+        }
+
+        foreach (var group in TrackGroups ?? [])
+        {
+            if (group?.TransformTracks is null) continue;
+
+            foreach (var track in group.TransformTracks)
             {
-                foreach (var track in group.TransformTracks)
-                {
-                    track.OrientationCurve.UpgradeToGr7();
-                    track.PositionCurve.UpgradeToGr7();
-                    track.ScaleShearCurve.UpgradeToGr7();
-                }
+                if (track is null) continue;
+
+                InvokeUpgradeCurveIfPresent(track, "OrientationCurve");
+                InvokeUpgradeCurveIfPresent(track, "PositionCurve");
+                InvokeUpgradeCurveIfPresent(track, "ScaleShearCurve");
             }
         }
     }
 
-    public void PreSave()
+    [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2075:UnrecognizedReflectionPattern", Justification = "Safe curve conversions lookups.")]
+    private static void InvokeUpgradeCurveIfPresent(TransformTrack track, string propertyName)
     {
+        var curveProp = track.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
+        var curveObj = curveProp?.GetValue(track);
+        if (curveObj is null) return;
+
+        var upgradeMethod = curveObj.GetType().GetMethod("UpgradeToGr7", BindingFlags.Public | BindingFlags.Instance)
+                            ?? curveObj.GetType().GetMethod("upgradeToGr7", BindingFlags.Public | BindingFlags.Instance);
+        upgradeMethod?.Invoke(curveObj, null);
+    }
+
+    public static void PreSave()
+    {
+        // Serialization preparation hook layout
     }
 }

@@ -1,15 +1,18 @@
 ﻿using System.ComponentModel;
+using System.Globalization;
 
 namespace LSLib.LS.Story;
 
-public class Fact : OsirisSerializable
+public sealed class Fact : IOsirisSerializable
 {
-    public List<Value> Columns;
+    public List<Value> Columns { get; set; } = [];
 
     public void Read(OsiReader reader)
     {
-        Columns = new List<Value>();
-        var count = reader.ReadByte();
+        ArgumentNullException.ThrowIfNull(reader);
+
+        byte count = reader.ReadByte();
+        Columns = new List<Value>(count);
         while (count-- > 0)
         {
             var value = new Value();
@@ -20,8 +23,10 @@ public class Fact : OsirisSerializable
 
     public void Write(OsiWriter writer)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+
         writer.Write((byte)Columns.Count);
-        foreach (var column in Columns)
+        foreach (Value column in Columns)
         {
             column.Write(writer);
         }
@@ -29,8 +34,11 @@ public class Fact : OsirisSerializable
 
     public void DebugDump(TextWriter writer, Story story)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(story);
+
         writer.Write("(");
-        for (var i = 0; i < Columns.Count; i++)
+        for (int i = 0; i < Columns.Count; i++)
         {
             Columns[i].DebugDump(writer, story);
             if (i < Columns.Count - 1) writer.Write(", ");
@@ -39,186 +47,150 @@ public class Fact : OsirisSerializable
     }
 }
 
-internal class FactPropertyDescriptor : PropertyDescriptor
+internal sealed class FactPropertyDescriptor(int index, Value.Type baseType, byte type) : PropertyDescriptor(index.ToString(CultureInfo.InvariantCulture), [])
 {
-    public int Index { get; private set; }
-    public Value.Type BaseType { get; private set; }
-    public byte Type { get; private set; }
+    public int Index { get; private set; } = index;
+    public Value.Type BaseType { get; private set; } = baseType;
+    public byte Type { get; private set; } = type;
 
-    public FactPropertyDescriptor(int index, Value.Type baseType, byte type)
-        : base(index.ToString(), new Attribute[0])
-    {
-        Index = index;
-        BaseType = baseType;
-        Type = type;
-    }
+    public override bool CanResetValue(object component) => false;
 
-    public override bool CanResetValue(object component)
-    {
-        return false;
-    }
+    public override Type ComponentType => typeof(Fact);
 
-    public override Type ComponentType
+    public override object? GetValue(object? component)
     {
-        get { return typeof(Fact); }
-    }
-
-    public override object GetValue(object component)
-    {
+        ArgumentNullException.ThrowIfNull(component);
         Fact fact = (Fact)component;
-        return fact.Columns[Index].ToString();
+        return fact.Columns[Index].ToString() ?? string.Empty;
     }
 
-    public override bool IsReadOnly
-    {
-        get { return false; }
-    }
+    public override bool IsReadOnly => false;
 
     public override Type PropertyType
     {
         get
         {
-            switch (BaseType)
+            return BaseType switch
             {
-                case Value.Type.Integer: return typeof(Int32);
-                case Value.Type.Integer64: return typeof(Int64);
-                case Value.Type.Float: return typeof(Single);
-                case Value.Type.String:
-                case Value.Type.GuidString: return typeof(String);
-                case Value.Type.None:
-                default: throw new InvalidOperationException("Cannot retrieve type of an unknown column");
-            }
+                Value.Type.Integer => typeof(int),
+                Value.Type.Integer64 => typeof(long),
+                Value.Type.Float => typeof(float),
+                Value.Type.String or Value.Type.GuidString => typeof(string),
+                _ => throw new InvalidOperationException("Cannot retrieve type of an unknown column parameter schema configuration.")
+            };
         }
     }
 
-    public override void ResetValue(object component)
-    {
-        throw new NotImplementedException();
-    }
+    public override void ResetValue(object component) => throw new NotImplementedException();
 
-    public override void SetValue(object component, object value)
+    public override void SetValue(object? component, object? value)
     {
+        ArgumentNullException.ThrowIfNull(component);
         Fact fact = (Fact)component;
-        var column = fact.Columns[Index];
+        Value column = fact.Columns[Index];
 
         switch (BaseType)
         {
             case Value.Type.Integer:
-                {
-                    if (value is String) column.IntValue = Int32.Parse((String)value);
-                    else if (value is Int32) column.IntValue = (Int32)value;
-                    else throw new ArgumentException("Invalid Int32 value");
-                    break;
-                }
+                if (value is string s) column.IntValue = int.Parse(s, CultureInfo.InvariantCulture);
+                else if (value is int i) column.IntValue = i;
+                else throw new ArgumentException("Invalid int value payload conversion sequence.");
+                break;
 
             case Value.Type.Integer64:
-                {
-                    if (value is String) column.Int64Value = Int64.Parse((String)value);
-                    else if (value is Int64) column.Int64Value = (Int64)value;
-                    else throw new ArgumentException("Invalid Int64 value");
-                    break;
-                }
+                if (value is string s64) column.Int64Value = long.Parse(s64, CultureInfo.InvariantCulture);
+                else if (value is long l64) column.Int64Value = l64;
+                else throw new ArgumentException("Invalid long value payload conversion sequence.");
+                break;
 
             case Value.Type.Float:
-                {
-                    if (value is String) column.FloatValue = Single.Parse((String)value);
-                    else if (value is Single) column.FloatValue = (Single)value;
-                    else throw new ArgumentException("Invalid float value");
-                    break;
-                }
+                if (value is string sf) column.FloatValue = float.Parse(sf, CultureInfo.InvariantCulture);
+                else if (value is float f) column.FloatValue = f;
+                else throw new ArgumentException("Invalid float value payload conversion sequence.");
+                break;
 
             case Value.Type.String:
             case Value.Type.GuidString:
-                {
-                    column.StringValue = (String)value;
-                    break;
-                }
+                column.StringValue = value as string ?? string.Empty;
+                break;
 
-            case Value.Type.None:
             default:
-                throw new InvalidOperationException("Cannot retrieve type of an unknown column");
+                throw new InvalidOperationException("Cannot resolve assignment target of an unknown column data paradigm schematic.");
         }
     }
 
-    public override bool ShouldSerializeValue(object component)
-    {
-        return false;
-    }
+    public override bool ShouldSerializeValue(object component) => false;
 }
 
-
-public class FactCollection : List<Fact>, ITypedList
+public sealed class FactCollection(Database database, Story story) : List<Fact>, ITypedList
 {
-    private Story Story;
-    private Database Database;
-    private PropertyDescriptorCollection Properties;
+    private readonly Story _story = story ?? throw new ArgumentNullException(nameof(story));
+    private readonly Database _database = database ?? throw new ArgumentNullException(nameof(database));
+    private PropertyDescriptorCollection? _properties;
 
-    public FactCollection(Database database, Story story)
-        : base()
+    public PropertyDescriptorCollection GetItemProperties(PropertyDescriptor[]? listAccessors)
     {
-        Database = database;
-        Story = story;
-    }
-
-    public PropertyDescriptorCollection GetItemProperties(PropertyDescriptor[] listAccessors)
-    {
-        if (Properties == null)
+        if (_properties is null)
         {
             var props = new List<PropertyDescriptor>();
-            var types = Database.Parameters.Types;
-            for (var i = 0; i < types.Count; i++)
+            List<uint> types = _database.Parameters.Types;
+
+            for (int i = 0; i < types.Count; i++)
             {
-                var type = Story.Types[types[i]];
-                Value.Type baseType;
-                if (type.Alias != 0)
-                    baseType = (Value.Type)type.Alias;
-                else
-                    baseType = (Value.Type)type.Index;
-                props.Add(new FactPropertyDescriptor(i, baseType, type.Index));
+                if (_story.Types.TryGetValue(types[i], out OsirisType? type))
+                {
+                    Value.Type baseType = type.Alias != 0 ? (Value.Type)type.Alias : (Value.Type)type.Index;
+                    props.Add(new FactPropertyDescriptor(i, baseType, type.Index));
+                }
             }
 
-            Properties = new PropertyDescriptorCollection(props.ToArray(), true);
+            _properties = new PropertyDescriptorCollection([.. props], true);
         }
 
-        return Properties;
+        return _properties;
     }
 
-    public string GetListName(PropertyDescriptor[] listAccessors)
-    {
-        return "";
-    }
+    public string GetListName(PropertyDescriptor[]? listAccessors) => string.Empty;
 }
 
-public class Database : OsirisSerializable
+public sealed class Database : IOsirisSerializable
 {
-    public UInt32 Index;
-    public ParameterList Parameters;
-    public FactCollection Facts;
-    public Node OwnerNode;
+    public uint Index { get; set; }
+    public ParameterList Parameters { get; set; } = new();
+    public FactCollection Facts { get; set; } = null!;
+    public Node? OwnerNode { get; set; }
 
     public void Read(OsiReader reader)
     {
+        ArgumentNullException.ThrowIfNull(reader);
+
         Index = reader.ReadUInt32();
         Parameters = new ParameterList();
         Parameters.Read(reader);
 
         Facts = new FactCollection(this, reader.Story);
-        reader.ReadList<Fact>(Facts);
+        reader.ReadList(Facts);
     }
 
     public void Write(OsiWriter writer)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+
+        writer.Write(Index);
         Parameters.Write(writer);
-        writer.WriteList<Fact>(Facts);
+        writer.WriteList(Facts);
     }
 
     public void DebugDump(TextWriter writer, Story story)
     {
-        if (OwnerNode != null && OwnerNode.Name.Length > 0)
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(story);
+
+        if (OwnerNode is not null && !string.IsNullOrEmpty(OwnerNode.Name))
         {
             writer.Write("{0}({1})", OwnerNode.Name, OwnerNode.NumParams);
         }
-        else if (OwnerNode != null)
+        else if (OwnerNode is not null)
         {
             writer.Write("<{0}>", OwnerNode.TypeName());
         }
@@ -229,9 +201,9 @@ public class Database : OsirisSerializable
 
         Parameters.DebugDump(writer, story);
 
-        writer.WriteLine("");
+        writer.WriteLine();
         writer.WriteLine("    Facts: ");
-        foreach (var fact in Facts)
+        foreach (Fact fact in Facts)
         {
             writer.Write("        ");
             fact.DebugDump(writer, story);

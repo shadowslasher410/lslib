@@ -1,4 +1,5 @@
 ﻿using LSLib.LS.Enums;
+using LSLib.LS.Resources.LSF;
 
 namespace LSLib.LS;
 
@@ -7,17 +8,18 @@ public class ResourceLoadParameters
     /// <summary>
     /// Byte-swap the last 8 bytes of GUIDs when serializing to/from string
     /// </summary>
-    public bool ByteSwapGuids = true;
+    public bool ByteSwapGuids { get; set; } = true;
 
-    public static ResourceLoadParameters FromGameVersion(Game game)
+
+    public static ResourceLoadParameters FromGameVersion(Game _)
     {
-        var p = new ResourceLoadParameters();
-        // No game-specific settings yet
-        return p;
+        return new ResourceLoadParameters();
     }
+
 
     public void ToSerializationSettings(NodeSerializationSettings settings)
     {
+        ArgumentNullException.ThrowIfNull(settings);
         settings.DefaultByteSwapGuids = ByteSwapGuids;
     }
 }
@@ -27,49 +29,50 @@ public class ResourceConversionParameters
     /// <summary>
     /// Format of generated PAK files
     /// </summary>
-    public PackageVersion PAKVersion;
+    public PackageVersion PAKVersion { get; set; }
 
     /// <summary>
     /// Format of generated LSF files
     /// </summary>
-    public LSFVersion LSF = LSFVersion.MaxWriteVersion;
+    public LSFVersion LSF { get; set; } = LSFVersion.MaxWriteVersion;
+
 
     /// <summary>
     /// Store sibling/neighbour node data in LSF files (usually done by savegames and dictionary-like files)
     /// (null = auto-detect based on input resource file)
     /// </summary>
-    public LSFMetadataFormat? MetadataFormat = null;
+    public LSFMetadataFormat? MetadataFormat { get; set; }
 
     /// <summary>
     /// Format of generated LSX files
     /// </summary>
-    public LSXVersion LSX = LSXVersion.V4;
+    public LSXVersion LSX { get; set; } = LSXVersion.V4;
 
     /// <summary>
     /// Pretty-print (format) LSX/LSJ files
     /// </summary>
-    public bool PrettyPrint = true;
+    public bool PrettyPrint { get; set; } = true;
 
     /// <summary>
     /// LSF/LSB compression method
     /// </summary>
-    public CompressionMethod Compression = CompressionMethod.None;
+    public CompressionMethod Compression { get; set; } = CompressionMethod.None;
 
     /// <summary>
     /// LSF/LSB compression level (i.e. size/compression time tradeoff)
     /// </summary>
-    public LSCompressionLevel CompressionLevel = LSCompressionLevel.Default;
+    public LSCompressionLevel CompressionLevel { get; set; } = LSCompressionLevel.Default;
 
     /// <summary>
     /// Byte-swap the last 8 bytes of GUIDs when serializing to/from string
     /// </summary>
-    public bool ByteSwapGuids = true;
+    public bool ByteSwapGuids { get; set; } = true;
 
     public static ResourceConversionParameters FromGameVersion(Game game)
     {
         return new ResourceConversionParameters
         {
-            PAKVersion = game.PAKVersion(),
+            PAKVersion = (PackageVersion)game.PAKVersion(),
             LSF = game.LSFVersion(),
             LSX = game.LSXVersion()
         };
@@ -77,11 +80,15 @@ public class ResourceConversionParameters
 
     public void ToSerializationSettings(NodeSerializationSettings settings)
     {
+        ArgumentNullException.ThrowIfNull(settings);
         settings.DefaultByteSwapGuids = ByteSwapGuids;
     }
 
     public void ToSerializationSettings(NodeSerializationSettings settings, Resource res)
     {
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(res);
+
         settings.DefaultByteSwapGuids = ByteSwapGuids;
         settings.LSFMetadata = res.MetadataFormat ?? settings.LSFMetadata;
     }
@@ -90,14 +97,15 @@ public class ResourceConversionParameters
 public class ResourceUtils
 {
     public delegate void ProgressUpdateDelegate(string status, long numerator, long denominator);
-    public ProgressUpdateDelegate progressUpdate = delegate { };
-    
+    public ProgressUpdateDelegate ProgressUpdate { get; set; } = delegate { };
+
     public delegate void ErrorDelegate(string path, Exception e);
-    public ErrorDelegate errorDelegate = delegate { };
+    public ErrorDelegate ErrorDelegates { get; set; } = delegate { };
 
     public static ResourceFormat ExtensionToResourceFormat(string path)
     {
-        var extension = Path.GetExtension(path).ToLower();
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        string extension = Path.GetExtension(path).ToLowerInvariant();
 
         return extension switch
         {
@@ -105,63 +113,83 @@ public class ResourceUtils
             ".lsb" => ResourceFormat.LSB,
             ".lsf" or ".lsfx" or ".lsbc" or ".lsbs" => ResourceFormat.LSF,
             ".lsj" => ResourceFormat.LSJ,
-            _ => throw new ArgumentException("Unrecognized file extension: " + extension),
+            _ => throw new ArgumentException($"Unrecognized resource file extension boundary: {extension}", nameof(path)),
         };
     }
 
     public static Resource LoadResource(string inputPath, ResourceLoadParameters loadParams)
     {
+        ArgumentException.ThrowIfNullOrEmpty(inputPath);
+        ArgumentNullException.ThrowIfNull(loadParams);
+
         return LoadResource(inputPath, ExtensionToResourceFormat(inputPath), loadParams);
     }
 
     public static Resource LoadResource(string inputPath, ResourceFormat format, ResourceLoadParameters loadParams)
     {
+        ArgumentException.ThrowIfNullOrEmpty(inputPath);
+        ArgumentNullException.ThrowIfNull(loadParams);
+
         using var stream = File.Open(inputPath, FileMode.Open, FileAccess.Read, FileShare.Read);
         return LoadResource(stream, format, loadParams);
     }
 
     public static Resource LoadResource(Stream stream, ResourceFormat format, ResourceLoadParameters loadParams)
     {
-        switch (format)
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(loadParams);
+
+        return format switch
         {
-            case ResourceFormat.LSX:
-                {
-                    using var reader = new LSXReader(stream);
-                    loadParams.ToSerializationSettings(reader.SerializationSettings);
-                    return reader.Read();
-                }
+            ResourceFormat.LSX => LoadLsx(stream, loadParams),
+            ResourceFormat.LSB => LoadLsb(stream),
+            ResourceFormat.LSF => LoadLsf(stream),
+            ResourceFormat.LSJ => LoadLsj(stream, loadParams),
+            _ => throw new ArgumentException("Invalid resource format configuration parameter passed into loader.", nameof(format))
+        };
+    }
 
-            case ResourceFormat.LSB:
-                {
-                    using var reader = new LSBReader(stream);
-                    return reader.Read();
-                }
+    private static Resource LoadLsx(Stream stream, ResourceLoadParameters loadParams)
+    {
+        using var reader = new LSXReader(stream);
+        loadParams.ToSerializationSettings(reader.SerializationSettings);
+        return reader.Read();
+    }
 
-            case ResourceFormat.LSF:
-                {
-                    using var reader = new LSFReader(stream);
-                    return reader.Read();
-                }
+    private static Resource LoadLsb(Stream stream)
+    {
+        using var reader = new LSBReader(stream);
+        return reader.Read();
+    }
 
-            case ResourceFormat.LSJ:
-                {
-                    using var reader = new LSJReader(stream);
-                    loadParams.ToSerializationSettings(reader.SerializationSettings);
-                    return reader.Read();
-                }
+    private static Resource LoadLsf(Stream stream)
+    {
+        using var reader = new LSFReader(stream);
+        return reader.Read();
+    }
 
-            default:
-                throw new ArgumentException("Invalid resource format");
-        }
+    private static Resource LoadLsj(Stream stream, ResourceLoadParameters loadParams)
+    {
+        using var reader = new LSJReader(stream);
+        loadParams.ToSerializationSettings(reader.SerializationSettings);
+        return reader.Read();
     }
 
     public static void SaveResource(Resource resource, string outputPath, ResourceConversionParameters conversionParams)
     {
+        ArgumentNullException.ThrowIfNull(resource);
+        ArgumentException.ThrowIfNullOrEmpty(outputPath);
+        ArgumentNullException.ThrowIfNull(conversionParams);
+
         SaveResource(resource, outputPath, ExtensionToResourceFormat(outputPath), conversionParams);
     }
 
     public static void SaveResource(Resource resource, string outputPath, ResourceFormat format, ResourceConversionParameters conversionParams)
     {
+        ArgumentNullException.ThrowIfNull(resource);
+        ArgumentException.ThrowIfNullOrEmpty(outputPath);
+        ArgumentNullException.ThrowIfNull(conversionParams);
+
         FileManager.TryToCreateDirectory(outputPath);
 
         using var file = File.Open(outputPath, FileMode.Create, FileAccess.Write);
@@ -211,31 +239,38 @@ public class ResourceUtils
                 }
 
             default:
-                throw new ArgumentException("Invalid resource format");
+                throw new ArgumentException("Invalid resource format configuration parameter passed into writer.", nameof(format));
         }
     }
 
-    private bool IsA(string path, ResourceFormat format)
+    private static bool IsA(string path, ResourceFormat format)
     {
-        var extension = Path.GetExtension(path).ToLower();
+        ArgumentException.ThrowIfNullOrEmpty(path);
+
+        string extension = Path.GetExtension(path).ToLowerInvariant();
         return format switch
         {
             ResourceFormat.LSX => extension == ".lsx",
             ResourceFormat.LSB => extension == ".lsb",
-            ResourceFormat.LSF => extension == ".lsf" || extension == ".lsbc" || extension == ".lsfx",
+            ResourceFormat.LSF => extension == ".lsf" || extension == ".lsbc" || extension == ".lsfx" || extension == ".lsbs",
             ResourceFormat.LSJ => extension == ".lsj",
             _ => false,
         };
     }
 
-    private void EnumerateFiles(List<string> paths, string rootPath, string currentPath, ResourceFormat format)
+    private static void EnumerateFiles(List<string> paths, string rootPath, string currentPath, ResourceFormat format)
     {
+        ArgumentNullException.ThrowIfNull(paths);
+        ArgumentException.ThrowIfNullOrEmpty(rootPath);
+        ArgumentException.ThrowIfNullOrEmpty(currentPath);
+
         foreach (string filePath in Directory.GetFiles(currentPath))
         {
             if (IsA(filePath, format))
             {
-                var relativePath = filePath[rootPath.Length..];
-                if (relativePath[0] == '/' || relativePath[0] == '\\')
+                string relativePath = filePath.Length >= rootPath.Length ? filePath[rootPath.Length..] : filePath;
+
+                if (relativePath.Length > 0 && (relativePath[0] == '/' || relativePath[0] == '\\'))
                 {
                     relativePath = relativePath[1..];
                 }
@@ -250,31 +285,38 @@ public class ResourceUtils
         }
     }
 
-    public void ConvertResources(string inputDir, string outputDir, ResourceFormat inputFormat, ResourceFormat outputFormat, 
+    public void ConvertResources(string inputDir, string outputDir, ResourceFormat inputFormat, ResourceFormat outputFormat,
         ResourceLoadParameters loadParams, ResourceConversionParameters conversionParams)
     {
-        this.progressUpdate("Enumerating files ...", 0, 1);
+        ArgumentException.ThrowIfNullOrEmpty(inputDir);
+        ArgumentException.ThrowIfNullOrEmpty(outputDir);
+        ArgumentNullException.ThrowIfNull(loadParams);
+        ArgumentNullException.ThrowIfNull(conversionParams);
+
+        ProgressUpdate("Enumerating files ...", 0, 1);
         var paths = new List<string>();
         EnumerateFiles(paths, inputDir, inputDir, inputFormat);
 
-        this.progressUpdate("Converting resources ...", 0, 1);
-        for (var i = 0; i < paths.Count; i++)
+        ProgressUpdate("Converting resources ...", 0, 1);
+        for (int i = 0; i < paths.Count; i++)
         {
-            var path = paths[i];
-            var inPath = Path.Join(inputDir, path);
-            var outPath = Path.Join(outputDir, Path.ChangeExtension(path, outputFormat.ToString().ToLower()));
+            string path = paths[i];
+            string inPath = Path.Join(inputDir, path);
+
+            string outExtension = outputFormat.ToString().ToLowerInvariant();
+            string outPath = Path.Join(outputDir, Path.ChangeExtension(path, outExtension));
 
             FileManager.TryToCreateDirectory(outPath);
 
-            this.progressUpdate("Converting: " + inPath, i, paths.Count);
+            ProgressUpdate($"Converting: {inPath}", i, paths.Count);
             try
             {
-                var resource = LoadResource(inPath, inputFormat, loadParams);
+                Resource resource = LoadResource(inPath, inputFormat, loadParams);
                 SaveResource(resource, outPath, outputFormat, conversionParams);
             }
             catch (Exception ex)
             {
-                errorDelegate(inPath, ex);
+                ErrorDelegates(inPath, ex);
             }
         }
     }

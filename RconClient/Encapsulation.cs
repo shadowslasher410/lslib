@@ -1,8 +1,6 @@
-﻿using System;
+﻿namespace LSLib.Rcon;
 
-namespace LSLib.Rcon;
-
-public enum EncapsulatedReliability
+public enum EncapsulatedReliability : byte
 {
     Unreliable = 0,
     UnreliableSequenced = 1,
@@ -10,123 +8,119 @@ public enum EncapsulatedReliability
     ReliableOrdered = 3,
     ReliableSequenced = 4,
     UnreliableAcked = 5,
-    RelaibleAcked = 6,
+    ReliableAcked = 6,
     ReliableOrderedAcked = 7
 }
 
 public struct EncapsulatedFlags
 {
-    public EncapsulatedReliability Reliability;
-    public bool Split;
+    public EncapsulatedReliability Reliability { get; set; }
+    public bool Split { get; set; }
 
     public void Read(BinaryReaderBE reader)
     {
-        Byte flags = reader.ReadByte();
+        byte flags = reader.ReadByte();
         Split = (flags & 0x10) == 0x10;
         Reliability = (EncapsulatedReliability)(flags >> 5);
     }
 
-    public void Write(BinaryWriterBE writer)
+    public readonly void Write(BinaryWriterBE writer)
     {
-        Byte flags = (Byte)(((Byte)Reliability << 5)
-            | (Split ? 0x10 : 0x00));
+        byte flags = (byte)(((byte)Reliability << 5) | (Split ? 0x10 : 0x00));
         writer.Write(flags);
     }
 
-    public bool IsReliable()
-    {
-        return Reliability == EncapsulatedReliability.Reliable
-            || Reliability == EncapsulatedReliability.ReliableOrdered
-            || Reliability == EncapsulatedReliability.ReliableSequenced
-            || Reliability == EncapsulatedReliability.RelaibleAcked
-            || Reliability == EncapsulatedReliability.ReliableOrderedAcked;
-    }
+    public readonly bool IsReliable() => Reliability is
+        EncapsulatedReliability.Reliable or
+        EncapsulatedReliability.ReliableOrdered or
+        EncapsulatedReliability.ReliableSequenced or
+        EncapsulatedReliability.ReliableAcked or
+        EncapsulatedReliability.ReliableOrderedAcked;
 
-    public bool IsOrdered()
-    {
-        return Reliability == EncapsulatedReliability.ReliableOrdered
-            || Reliability == EncapsulatedReliability.ReliableOrderedAcked;
-    }
+    public readonly bool IsOrdered() => Reliability is
+         EncapsulatedReliability.ReliableOrdered or
+         EncapsulatedReliability.ReliableOrderedAcked;
 
-    public bool IsSequenced()
-    {
-        return Reliability == EncapsulatedReliability.UnreliableSequenced
-            || Reliability == EncapsulatedReliability.ReliableSequenced;
-    }
+    public readonly bool IsSequenced() => Reliability is
+        EncapsulatedReliability.UnreliableSequenced or
+        EncapsulatedReliability.ReliableSequenced;
 }
 
-public class EncapsulatedPacket : Packet
+public class EncapsulatedPacket : IPacket
 {
-    public EncapsulatedFlags Flags;
-    public UInt16 Length;
-    public SequenceNumber MessageIndex;
-    public SequenceNumber SequenceIndex;
-    public SequenceNumber OrderIndex;
-    public Byte OrderChannel;
-    public UInt32 SplitCount;
-    public UInt16 SplitId;
-    public UInt32 SplitIndex;
-    public byte[] Payload;
+    public EncapsulatedFlags Flags { get; set; }
+    public ushort Length { get; set; }
+    public SequenceNumber MessageIndex { get; set; }
+    public SequenceNumber SequenceIndex { get; set; }
+    public SequenceNumber OrderIndex { get; set; }
+    public byte OrderChannel { get; set; }
+    public uint SplitCount { get; set; }
+    public ushort SplitId { get; set; }
+    public uint SplitIndex { get; set; }
+    public byte[] Payload { get; set; } = [];
 
-    public void Read(BinaryReaderBE Reader)
+    public void Read(BinaryReaderBE reader)
     {
-        Flags.Read(Reader);
-        Length = Reader.ReadUInt16BE();
+        var tempFlags = Flags;
+        tempFlags.Read(reader);
+        Flags = tempFlags;
+
+        Length = reader.ReadUInt16BE();
 
         if (Flags.IsReliable())
         {
-            MessageIndex.Read(Reader);
+            MessageIndex.Read(reader);
         }
 
         if (Flags.IsSequenced())
         {
-            SequenceIndex.Read(Reader);
+            SequenceIndex.Read(reader);
         }
 
         if (Flags.IsSequenced() || Flags.IsOrdered())
         {
-            OrderIndex.Read(Reader);
-            OrderChannel = Reader.ReadByte();
+            OrderIndex.Read(reader);
+            OrderChannel = reader.ReadByte();
         }
 
         if (Flags.Split)
         {
-            SplitCount = Reader.ReadUInt32BE();
-            SplitId = Reader.ReadUInt16BE();
-            SplitIndex = Reader.ReadUInt32BE();
+            SplitCount = reader.ReadUInt32BE();
+            SplitId = reader.ReadUInt16BE();
+            SplitIndex = reader.ReadUInt32BE();
         }
 
-        Payload = Reader.ReadBytes(Length);
+        Payload = reader.ReadBytes(Length);
     }
 
-    public void Write(BinaryWriterBE Writer)
+    public void Write(BinaryWriterBE writer)
     {
-        Flags.Write(Writer);
-        Writer.WriteBE(Length);
+        Flags.Write(writer);
+        writer.WriteBE(Length);
 
         if (Flags.IsReliable())
         {
-            MessageIndex.Write(Writer);
+            MessageIndex.Write(writer);
         }
 
         if (Flags.IsSequenced())
         {
-            SequenceIndex.Write(Writer);
+            SequenceIndex.Write(writer);
         }
 
         if (Flags.IsSequenced() || Flags.IsOrdered())
         {
-            OrderIndex.Write(Writer);
-            Writer.Write(OrderChannel);
+            OrderIndex.Write(writer);
+            writer.Write(OrderChannel);
         }
 
         if (Flags.Split)
         {
-            Writer.WriteBE(SplitCount);
-            Writer.WriteBE(SplitId);
-            Writer.WriteBE(SplitIndex);
+            writer.WriteBE(SplitCount);
+            writer.WriteBE(SplitId);
+            writer.WriteBE(SplitIndex);
         }
 
-        Writer.Write(Payload);
+        writer.Write(Payload.AsSpan());
     }
 }

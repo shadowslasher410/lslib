@@ -1,205 +1,162 @@
-﻿using System;
-using Google.Protobuf;
-using System.IO;
-using LSLib.LS;
+﻿using LSLib.LS;
 using LSLib.LS.Story.Compiler;
+using LightProto;
 using System.Text;
 
 namespace LSTools.StoryCompiler;
 
-class DebugInfoSaver
+public class DebugInfoSaver
 {
-    private DatabaseDebugInfoMsg ToProtobuf(DatabaseDebugInfo debugInfo)
+    private static DatabaseDebugInfoMsg ToLightProto(DatabaseDebugInfo debugInfo)
     {
         var msg = new DatabaseDebugInfoMsg
         {
-            Id = debugInfo.Id,
+            Id = (uint)debugInfo.Id,
             Name = debugInfo.Name
         };
+
         foreach (var paramType in debugInfo.ParamTypes)
         {
-            msg.ParamTypes.Add(paramType);
+            msg.ParamTypes.Add((uint)paramType);
         }
-
         return msg;
     }
 
-    private GoalDebugInfoMsg ToProtobuf(GoalDebugInfo debugInfo)
+    private static GoalDebugInfoMsg ToLightProto(GoalDebugInfo debugInfo)
     {
         var msg = new GoalDebugInfoMsg
         {
-            Id = debugInfo.Id,
+            Id = (uint)debugInfo.Id,
             Name = debugInfo.Name,
             Path = debugInfo.Path
         };
 
         foreach (var action in debugInfo.InitActions)
         {
-            var varAct = ToProtobuf(action);
-            msg.InitActions.Add(varAct);
+            msg.InitActions.Add(ToLightProto(action));
         }
 
         foreach (var action in debugInfo.ExitActions)
         {
-            var varAct = ToProtobuf(action);
-            msg.ExitActions.Add(varAct);
+            msg.ExitActions.Add(ToLightProto(action));
         }
 
         return msg;
     }
 
-    private RuleVariableDebugInfoMsg ToProtobuf(RuleVariableDebugInfo debugInfo)
+    private static RuleVariableDebugInfoMsg ToLightProto(RuleVariableDebugInfo debugInfo) => new()
     {
-        return new RuleVariableDebugInfoMsg
-        {
-            Index = debugInfo.Index,
-            Name = debugInfo.Name,
-            Type = debugInfo.Type,
-            Unused = debugInfo.Unused
-        };
-    }
+        Index = (uint)debugInfo.Index,
+        Type = (uint)debugInfo.Type,
+        Name = debugInfo.Name,
+        Unused = debugInfo.Unused
+    };
 
-    private ActionDebugInfoMsg ToProtobuf(ActionDebugInfo debugInfo)
+    private static ActionDebugInfoMsg ToLightProto(ActionDebugInfo debugInfo) => new()
     {
-        return new ActionDebugInfoMsg
-        {
-            Line = debugInfo.Line
-        };
-    }
+        Line = (uint)debugInfo.Line
+    };
 
-    private RuleDebugInfoMsg ToProtobuf(RuleDebugInfo debugInfo)
+    private static RuleDebugInfoMsg ToLightProto(RuleDebugInfo debugInfo)
     {
         var msg = new RuleDebugInfoMsg
         {
-            Id = debugInfo.Id,
-            GoalId = debugInfo.GoalId,
+            Id = (uint)debugInfo.Id,
+            GoalId = (uint)debugInfo.GoalId,
             Name = debugInfo.Name,
-            ConditionsStartLine = debugInfo.ConditionsStartLine,
-            ConditionsEndLine = debugInfo.ConditionsEndLine,
-            ActionsStartLine = debugInfo.ActionsStartLine,
-            ActionsEndLine = debugInfo.ActionsEndLine
+            ConditionsStartLine = (uint)debugInfo.ConditionsStartLine,
+            ConditionsEndLine = (uint)debugInfo.ConditionsEndLine,
+            ActionsStartLine = (uint)debugInfo.ActionsStartLine,
+            ActionsEndLine = (uint)debugInfo.ActionsEndLine
         };
 
         foreach (var variable in debugInfo.Variables)
         {
-            var varMsg = ToProtobuf(variable);
-            msg.Variables.Add(varMsg);
+            msg.Variables.Add(ToLightProto(variable));
         }
 
         foreach (var action in debugInfo.Actions)
         {
-            var varAct = ToProtobuf(action);
-            msg.Actions.Add(varAct);
+            msg.Actions.Add(ToLightProto(action));
         }
 
         return msg;
     }
 
-    private NodeDebugInfoMsg ToProtobuf(NodeDebugInfo debugInfo)
+    private static NodeDebugInfoMsg ToLightProto(NodeDebugInfo debugInfo)
     {
         var msg = new NodeDebugInfoMsg
         {
-            Id = debugInfo.Id,
-            RuleId = debugInfo.RuleId,
-            Line = (UInt32)debugInfo.Line,
-            DatabaseId = debugInfo.DatabaseId,
+            Id = (uint)debugInfo.Id,
+            RuleId = (uint)debugInfo.RuleId,
+            Line = (uint)debugInfo.Line,
+            DatabaseId = (uint)debugInfo.DatabaseId,
             Name = debugInfo.Name,
-            Type = (NodeDebugInfoMsg.Types.NodeType)debugInfo.Type,
-            ParentNodeId = debugInfo.ParentNodeId,
-            FunctionName = debugInfo.FunctionName != null ? debugInfo.FunctionName.Name : "",
-            FunctionArity = debugInfo.FunctionName != null ? (uint)debugInfo.FunctionName.Arity : 0
+            Type = (NodeDebugInfoMsg.NodeType)(int)debugInfo.Type,
+            ParentNodeId = (uint)debugInfo.ParentNodeId,
+            FunctionName = debugInfo.FunctionName?.Name ?? string.Empty,
+            FunctionArity = debugInfo.FunctionName is not null ? (uint)debugInfo.FunctionName.Arity : 0u
         };
 
-        foreach (var map in debugInfo.ColumnToVariableMaps)
+        foreach (var (key, value) in debugInfo.ColumnToVariableMaps)
         {
-            msg.ColumnMaps.Add((UInt32)map.Key, (UInt32)map.Value);
+            msg.ColumnMaps.Add((uint)key, (uint)value);
         }
 
         return msg;
     }
 
-    private FunctionParamDebugInfoMsg ToProtobuf(FunctionParamDebugInfo debugInfo)
+    private static FunctionParamDebugInfoMsg ToLightProto(FunctionParamDebugInfo debugInfo) => new()
     {
-        return new FunctionParamDebugInfoMsg
-        {
-            TypeId = debugInfo.TypeId,
-            Name = debugInfo.Name ?? "",
-            Out = debugInfo.Out
-        };
-    }
+        TypeId = (uint)debugInfo.TypeId,
+        Name = debugInfo.Name ?? string.Empty,
+        Out = debugInfo.Out
+    };
 
-    private FunctionDebugInfoMsg ToProtobuf(FunctionDebugInfo debugInfo)
+    private static FunctionDebugInfoMsg ToLightProto(FunctionDebugInfo debugInfo)
     {
         var msg = new FunctionDebugInfoMsg
         {
             Name = debugInfo.Name,
-            TypeId = debugInfo.TypeId
+            TypeId = (uint)debugInfo.TypeId
         };
 
         foreach (var param in debugInfo.Params)
         {
-            msg.Params.Add(ToProtobuf(param));
+            msg.Params.Add(ToLightProto(param));
         }
 
         return msg;
     }
 
-    private StoryDebugInfoMsg ToProtobuf(StoryDebugInfo debugInfo)
+    private static StoryDebugInfoMsg ToLightProto(StoryDebugInfo debugInfo)
     {
-        var msg = new StoryDebugInfoMsg();
-        msg.Version = debugInfo.Version;
-
-        foreach (var db in debugInfo.Databases)
+        var msg = new StoryDebugInfoMsg
         {
-            var dbMsg = ToProtobuf(db.Value);
-            msg.Databases.Add(dbMsg);
-        }
+            Version = (uint)debugInfo.Version
+        };
 
-        foreach (var goal in debugInfo.Goals)
-        {
-            var goalMsg = ToProtobuf(goal.Value);
-            msg.Goals.Add(goalMsg);
-        }
-
-        foreach (var rule in debugInfo.Rules)
-        {
-            var ruleMsg = ToProtobuf(rule.Value);
-            msg.Rules.Add(ruleMsg);
-        }
-
-        foreach (var node in debugInfo.Nodes)
-        {
-            var nodeMsg = ToProtobuf(node.Value);
-            msg.Nodes.Add(nodeMsg);
-        }
-
-        foreach (var func in debugInfo.Functions)
-        {
-            var funcMsg = ToProtobuf(func.Value);
-            msg.Functions.Add(funcMsg);
-        }
+        foreach (var db in debugInfo.Databases.Values) msg.Databases.Add(ToLightProto(db));
+        foreach (var goal in debugInfo.Goals.Values) msg.Goals.Add(ToLightProto(goal));
+        foreach (var rule in debugInfo.Rules.Values) msg.Rules.Add(ToLightProto(rule));
+        foreach (var node in debugInfo.Nodes.Values) msg.Nodes.Add(ToLightProto(node));
+        foreach (var function in debugInfo.Functions.Values) msg.Functions.Add(ToLightProto(function));
 
         return msg;
     }
 
-    public void Save(Stream stream, StoryDebugInfo debugInfo)
+    public static void Save(Stream stream, StoryDebugInfo debugInfo)
     {
-        var msg = ToProtobuf(debugInfo);
-        using (var ms = new MemoryStream())
-        using (var codedStream = new CodedOutputStream(ms))
-        {
-            msg.WriteTo(codedStream);
-            codedStream.Flush();
+        var msg = ToLightProto(debugInfo);
 
-            byte[] proto = ms.ToArray();
-            var flags = CompressionHelpers.MakeCompressionFlags(CompressionMethod.LZ4, LSCompressionLevel.Fast);
-            byte[] compressed = CompressionHelpers.Compress(proto, flags);
-            stream.Write(compressed, 0, compressed.Length);
+        byte[] proto = msg.ToByteArray();
 
-            using (var writer = new BinaryWriter(stream, Encoding.UTF8, true))
-            {
-                writer.Write((UInt32)proto.Length);
-            }
-        }
+        var flags = CompressionHelpers.MakeCompressionFlags(CompressionMethod.LZ4, LSCompressionLevel.Fast);
+        byte[] compressed = CompressionHelpers.Compress(proto, flags);
+
+        stream.Write(compressed.AsSpan());
+
+        using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
+        writer.Write((uint)proto.Length);
     }
 }

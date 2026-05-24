@@ -1,443 +1,504 @@
-﻿using Newtonsoft.Json;
+﻿using System.Globalization;
+using System.Text.Json;
 
 namespace LSLib.LS.Story;
 
-public class StoryDebugExportVisitor
+public sealed class StoryDebugExportVisitor(Stream outputStream)
 {
-    private Stream stream;
-    private JsonTextWriter writer;
-
-    public StoryDebugExportVisitor(Stream outputStream)
-    {
-        stream = outputStream;
-    }
+    private readonly Stream _stream = outputStream ?? throw new ArgumentNullException(nameof(outputStream));
 
     public void Visit(Story story)
     {
-        using (var streamWriter = new StreamWriter(stream))
-        using (this.writer = new JsonTextWriter(streamWriter))
-        {
-            writer.IndentChar = '\t';
-            writer.Indentation = 1;
-            writer.Formatting = Newtonsoft.Json.Formatting.Indented;
-
+            var options = new JsonWriterOptions
+            {
+                Indented = true,
+                IndentCharacter = '\t',
+                IndentSize = 1,
+                SkipValidation = false
+            };
+            using var writer = new Utf8JsonWriter(_stream, options);
             writer.WriteStartObject();
 
             writer.WritePropertyName("types");
             writer.WriteStartObject();
-            foreach (var type in story.Types)
-            {
-                writer.WritePropertyName(type.Key.ToString());
-                Visit(type.Value);
-            }
-            writer.WriteEndObject();
+        foreach (KeyValuePair<uint, OsirisType> type in story.Types)
+        {
+            writer.WritePropertyName(type.Key.ToString(CultureInfo.InvariantCulture));
+            Visit(writer, type.Value);
+        }
+        writer.WriteEndObject();
 
-            writer.WritePropertyName("objects");
-            writer.WriteStartObject();
-            foreach (var obj in story.DivObjects)
+        writer.WritePropertyName("objects");
+        writer.WriteStartObject();
+        foreach (OsirisDivObject obj in story.DivObjects)
+        {
+            if (obj?.Name is not null)
             {
                 writer.WritePropertyName(obj.Name);
-                Visit(obj);
+                Visit(writer, obj);
             }
-            writer.WriteEndObject();
+        }
+        writer.WriteEndObject();
 
-            writer.WritePropertyName("functions");
+        writer.WritePropertyName("functions");
+        writer.WriteStartObject();
+        int funcId = 1;
+        foreach (Function fun in story.Functions)
+        {
+            writer.WritePropertyName(funcId.ToString(CultureInfo.InvariantCulture));
+            funcId++;
+            Visit(writer, fun);
+        }
+        writer.WriteEndObject();
+
+        writer.WritePropertyName("nodes");
+        writer.WriteStartObject();
+        foreach (KeyValuePair<uint, Node> node in story.Nodes)
+        {
+            writer.WritePropertyName(node.Key.ToString(CultureInfo.InvariantCulture));
             writer.WriteStartObject();
-            Int32 funcId = 1;
-            foreach (var fun in story.Functions)
-            {
-                writer.WritePropertyName(funcId.ToString());
-                funcId++;
-                Visit(fun);
-            }
+            VisitNode(writer, node.Value);
             writer.WriteEndObject();
+        }
+        writer.WriteEndObject();
 
-            writer.WritePropertyName("nodes");
+        writer.WritePropertyName("adapters");
+        writer.WriteStartObject();
+        foreach (KeyValuePair<uint, Adapter> adapter in story.Adapters)
+        {
+            writer.WritePropertyName(adapter.Key.ToString(CultureInfo.InvariantCulture));
             writer.WriteStartObject();
-            foreach (var node in story.Nodes)
-            {
-                writer.WritePropertyName(node.Key.ToString());
-                writer.WriteStartObject();
-                VisitNode(node.Value);
-                writer.WriteEndObject();
-            }
             writer.WriteEndObject();
+        }
+        writer.WriteEndObject();
 
-            writer.WritePropertyName("adapters");
+        writer.WritePropertyName("databases");
+        writer.WriteStartObject();
+        foreach (KeyValuePair<uint, Database> database in story.Databases)
+        {
+            writer.WritePropertyName(database.Key.ToString(CultureInfo.InvariantCulture));
             writer.WriteStartObject();
-            foreach (var adapter in story.Adapters)
-            {
-                writer.WritePropertyName(adapter.Key.ToString());
-                Visit(adapter.Value);
-            }
             writer.WriteEndObject();
+        }
+        writer.WriteEndObject();
 
-            writer.WritePropertyName("databases");
+        writer.WritePropertyName("goals");
+        writer.WriteStartObject();
+        foreach (KeyValuePair<uint, Goal> goal in story.Goals)
+        {
+            writer.WritePropertyName(goal.Key.ToString(CultureInfo.InvariantCulture));
             writer.WriteStartObject();
-            foreach (var database in story.Databases)
-            {
-                writer.WritePropertyName(database.Key.ToString());
-                Visit(database.Value);
-            }
             writer.WriteEndObject();
+        }
+        writer.WriteEndObject();
 
-            writer.WritePropertyName("goals");
-            writer.WriteStartObject();
-            foreach (var goal in story.Goals)
-            {
-                writer.WritePropertyName(goal.Key.ToString());
-                Visit(goal.Value);
-            }
-            writer.WriteEndObject();
+        writer.WriteEndObject();
+        writer.Flush();
+    }
 
-            writer.WriteEndObject();
+    public static void Visit(Utf8JsonWriter writer, OsirisType type)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(type);
+
+        writer.WriteStartObject();
+        writer.WriteString("name", type.Name ?? string.Empty);
+        writer.WriteEndObject();
+    }
+
+    public static void Visit(Utf8JsonWriter writer, OsirisDivObject obj)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(obj);
+
+        writer.WriteStartObject();
+        writer.WriteString("name", obj.Name ?? string.Empty);
+        writer.WriteNumber("type", obj.Type);
+        writer.WriteEndObject();
+    }
+
+    public static void Visit(Utf8JsonWriter writer, NodeReference r)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(r);
+
+        if (r.IsNull)
+            writer.WriteNullValue();
+        else
+            writer.WriteNumberValue(r.Index);
+    }
+
+    public static void Visit(Utf8JsonWriter writer, FunctionSignature fun)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(fun);
+
+        writer.WriteStartObject();
+        writer.WriteString("name", fun.Name ?? string.Empty);
+
+        if (fun.OutParamMask is { Count: > 0 })
+        {
+            writer.WriteNumber("out", fun.OutParamMask[0]);
+        }
+
+        writer.WritePropertyName("params");
+        writer.WriteStartObject();
+        writer.WriteEndObject();
+
+        writer.WriteEndObject();
+    }
+
+    public static void Visit(Utf8JsonWriter writer, Function fun)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(fun);
+
+        writer.WriteStartObject();
+        writer.WritePropertyName("signature");
+        if (fun.Name is not null) Visit(writer, fun.Name);
+        writer.WriteString("type", fun.Type.ToString());
+        writer.WritePropertyName("ref");
+        if (fun.NodeRef is not null) Visit(writer, fun.NodeRef);
+        writer.WriteEndObject();
+    }
+
+    public static void VisitNode(Utf8JsonWriter writer, Node node)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(node);
+
+        if (node is RelOpNode relOpNode)
+        {
+            Visit(writer, relOpNode);
+        }
+        else if (node is RuleNode)
+        {
+            writer.WriteString("nodeType", "RuleNode");
+        }
+        else if (node is UserQueryNode or InternalQueryNode or DivQueryNode or QueryNode)
+        {
+            writer.WriteString("nodeType", "QueryNode");
+        }
+        else if (node is AndNode or NotAndNode or JoinNode)
+        {
+            writer.WriteString("nodeType", "JoinNode");
+        }
+        else if (node is ProcNode or DatabaseNode or DataNode)
+        {
+            writer.WriteString("nodeType", "DataNode");
+        }
+        else
+        {
+            throw new NotSupportedException($"Unsupported AST narrative node format pattern encountered: {node.GetType().Name}");
         }
     }
 
-    public void Visit(OsirisType type)
+    public static void Visit(Utf8JsonWriter writer, Value val)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(val);
+
+        writer.WriteNumber("type", val.TypeId);
+        writer.WriteString("value", val.ToString() ?? string.Empty);
+    }
+
+    public static void Visit(Utf8JsonWriter writer, TypedValue val)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(val);
+
+        Visit(writer, (Value)val);
+        writer.WriteBoolean("valid", val.IsValid);
+        writer.WriteBoolean("out", val.OutParam);
+        writer.WriteBoolean("isType", val.IsAType);
+    }
+
+    public static void Visit(Utf8JsonWriter writer, Variable var)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(var);
+
+        Visit(writer, (TypedValue)var);
+        writer.WriteNumber("index", var.Index);
+        writer.WriteBoolean("unused", var.Unused);
+        writer.WriteBoolean("adapted", var.Adapted);
+        writer.WriteString("name", var.VariableName ?? string.Empty);
+    }
+
+    public static void VisitVar(Utf8JsonWriter writer, Value val)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(val);
+
         writer.WriteStartObject();
-        writer.WritePropertyName("name");
-        writer.WriteValue(type.Name);
+        if (val is Variable variable)
+            Visit(writer, variable);
+        else if (val is TypedValue typedValue)
+            Visit(writer, typedValue);
+        else
+            Visit(writer, val);
         writer.WriteEndObject();
     }
 
-    public void Visit(OsirisDivObject obj)
+    public static void Visit(Utf8JsonWriter writer, AdapterReference r)
     {
-        writer.WriteStartObject();
-        writer.WritePropertyName("name");
-        writer.WriteValue(obj.Name);
-        writer.WritePropertyName("type");
-        writer.WriteValue(obj.Type);
-        writer.WriteEndObject();
-    }
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(r);
 
-    public void Visit(NodeReference r)
-    {
         if (r.IsNull)
-            writer.WriteNull();
+            writer.WriteNullValue();
         else
-            writer.WriteValue(r.Index);
+            writer.WriteNumberValue(r.Index);
     }
 
-    public void Visit(FunctionSignature fun)
+    public static void Visit(Utf8JsonWriter writer, DatabaseReference r)
     {
-        writer.WriteStartObject();
-        writer.WritePropertyName("name");
-        writer.WriteValue(fun.Name);
-        writer.WritePropertyName("out");
-        writer.WriteValue(fun.OutParamMask[0]);
-        writer.WritePropertyName("params");
-        Visit(fun.Parameters);
-        writer.WriteEndObject();
-    }
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(r);
 
-    public void Visit(Function fun)
-    {
-        writer.WriteStartObject();
-        writer.WritePropertyName("signature");
-        Visit(fun.Name);
-        writer.WritePropertyName("type");
-        writer.WriteValue(fun.Type.ToString());
-        writer.WritePropertyName("ref");
-        Visit(fun.NodeRef);
-        writer.WriteEndObject();
-    }
-
-    public void VisitNode(Node node)
-    {
-        if (node is RelOpNode)
-            Visit(node as RelOpNode);
-        else if (node is RuleNode)
-            Visit(node as RuleNode);
-        //else if (node is RelNode)
-        //    Visit(node as RelNode);
-        else if (node is UserQueryNode)
-            Visit(node as QueryNode);
-        else if (node is InternalQueryNode)
-            Visit(node as QueryNode);
-        else if (node is DivQueryNode)
-            Visit(node as QueryNode);
-        //else if (node is QueryNode)
-        //    Visit(node as QueryNode);
-        else if (node is AndNode)
-            Visit(node as JoinNode);
-        else if (node is NotAndNode)
-            Visit(node as JoinNode);
-        //else if (node is JoinNode)
-        //    Visit(node as JoinNode);
-        //else if (node is TreeNode)
-        //    Visit(node as TreeNode);
-        else if (node is ProcNode)
-            Visit(node as DataNode);
-        else if (node is DatabaseNode)
-            Visit(node as DataNode);
-        // else if (node is DataNode)
-        //     Visit(node as DataNode);
-        else
-            throw new Exception("Unsupported node type");
-    }
-
-    public void Visit(Value val)
-    {
-        writer.WritePropertyName("type");
-        writer.WriteValue(val.TypeId);
-        writer.WritePropertyName("value");
-        writer.WriteValue(val.ToString());
-    }
-
-    public void Visit(TypedValue val)
-    {
-        Visit(val as Value);
-        writer.WritePropertyName("valid");
-        writer.WriteValue(val.IsValid);
-        writer.WritePropertyName("out");
-        writer.WriteValue(val.OutParam);
-        writer.WritePropertyName("isType");
-        writer.WriteValue(val.IsAType);
-    }
-
-    public void Visit(Variable var)
-    {
-        Visit(var as TypedValue);
-        writer.WritePropertyName("index");
-        writer.WriteValue(var.Index);
-        writer.WritePropertyName("unused");
-        writer.WriteValue(var.Unused);
-        writer.WritePropertyName("adapted");
-        writer.WriteValue(var.Adapted);
-        writer.WritePropertyName("name");
-        writer.WriteValue(var.VariableName);
-    }
-
-    public void VisitVar(Value val)
-    {
-        writer.WriteStartObject();
-        if (val is Variable)
-            Visit(val as Variable);
-        else if (val is TypedValue)
-            Visit(val as TypedValue);
-        else
-            Visit(val);
-        writer.WriteEndObject();
-    }
-
-    public void Visit(AdapterReference r)
-    {
         if (r.IsNull)
-            writer.WriteNull();
+            writer.WriteNullValue();
         else
-            writer.WriteValue(r.Index);
+            writer.WriteNumberValue(r.Index);
     }
 
-    public void Visit(DatabaseReference r)
+    public static void Visit(Utf8JsonWriter writer, GoalReference r)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(r);
+
         if (r.IsNull)
-            writer.WriteNull();
+            writer.WriteNullValue();
         else
-            writer.WriteValue(r.Index);
+            writer.WriteNumberValue(r.Index);
     }
 
-    public void Visit(GoalReference r)
+    public static void Visit(Utf8JsonWriter writer, NodeEntryItem entry)
     {
-        if (r.IsNull)
-            writer.WriteNull();
-        else
-            writer.WriteValue(r.Index);
-    }
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(entry);
 
-    public void Visit(NodeEntryItem entry)
-    {
         writer.WriteStartObject();
         writer.WritePropertyName("node");
-        Visit(entry.NodeRef);
-        writer.WritePropertyName("entry");
-        writer.WriteValue(entry.EntryPoint);
+        if (entry.NodeRef is not null) Visit(writer, entry.NodeRef);
+        writer.WriteString("entry", entry.EntryPoint.ToString());
         writer.WritePropertyName("goal");
-        Visit(entry.GoalRef);
+        if (entry.GoalRef is not null) Visit(writer, entry.GoalRef);
         writer.WriteEndObject();
     }
 
-    public void Visit(RelOpNode node)
+    public static void Visit(Utf8JsonWriter writer, RelOpNode node)
     {
-        Visit(node as RelNode);
-        writer.WritePropertyName("op");
-        writer.WriteValue(node.RelOp.ToString());
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(node);
+
+        writer.WriteString("op", node.RelOp.ToString());
         writer.WritePropertyName("left");
-        VisitVar(node.LeftValue);
-        writer.WritePropertyName("leftIndex");
-        writer.WriteValue(node.LeftValueIndex);
+        if (node.LeftValue is not null) VisitVar(writer, node.LeftValue);
+        writer.WriteNumber("leftIndex", node.LeftValueIndex);
         writer.WritePropertyName("right");
-        VisitVar(node.RightValue);
-        writer.WritePropertyName("rightIndex");
-        writer.WriteValue(node.RightValueIndex);
+        if (node.RightValue is not null) VisitVar(writer, node.RightValue);
+        writer.WriteNumber("rightIndex", node.RightValueIndex);
     }
 
-    public void Visit(RuleNode node)
+    public static void Visit(Utf8JsonWriter writer, RuleNode node)
     {
-        Visit(node as RelNode);
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(node);
+
+        Visit(writer, (RelNode)node);
+
         writer.WritePropertyName("calls");
         writer.WriteStartArray();
-        foreach (var call in node.Calls)
+        foreach (Call call in node.Calls)
         {
-            Visit(call);
+            if (call is not null) Visit(writer, call);
         }
         writer.WriteEndArray();
 
         writer.WritePropertyName("variables");
         writer.WriteStartArray();
-        foreach (var v in node.Variables)
+        foreach (Variable v in node.Variables)
         {
-            VisitVar(v);
+            if (v is not null) VisitVar(writer, v);
         }
         writer.WriteEndArray();
 
-        writer.WritePropertyName("line");
-        writer.WriteValue(node.Line);
-        writer.WritePropertyName("query");
-        writer.WriteValue(node.IsQuery);
+        writer.WriteNumber("line", node.Line);
+        writer.WriteBoolean("query", node.IsQuery);
     }
 
-    public void Visit(RelNode node)
+    public static void Visit(Utf8JsonWriter writer, RelNode node)
     {
-        Visit(node as TreeNode);
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(node);
+
+        Visit(writer, (TreeNode)node);
+
         writer.WritePropertyName("parent");
-        Visit(node.ParentRef);
+        if (node.ParentRef is not null) Visit(writer, node.ParentRef);
+
         writer.WritePropertyName("adapter");
-        Visit(node.AdapterRef);
+        if (node.AdapterRef is not null) Visit(writer, node.AdapterRef);
+
         writer.WritePropertyName("databaseNode");
-        Visit(node.RelDatabaseNodeRef);
+        if (node.RelDatabaseNodeRef is not null) Visit(writer, node.RelDatabaseNodeRef);
+
         writer.WritePropertyName("databaseJoin");
-        Visit(node.RelJoin);
-        writer.WritePropertyName("databaseIndirection");
-        writer.WriteValue(node.RelDatabaseIndirection);
+        if (node.RelJoin is not null) Visit(writer, node.RelJoin);
+
+        writer.WriteNumber("databaseIndirection", node.RelDatabaseIndirection);
     }
 
-    public void Visit(TreeNode node)
+    public static void Visit(Utf8JsonWriter writer, TreeNode node)
     {
-        Visit(node as Node);
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(node);
+
+        Visit(writer, (Node)node);
+
         writer.WritePropertyName("next");
-        Visit(node.NextNode);
+        if (node.NextNode is not null) Visit(writer, node.NextNode);
     }
 
-    public void Visit(Node node)
+    public static void Visit(Utf8JsonWriter writer, Node node)
     {
-        writer.WritePropertyName("type");
-        writer.WriteValue(node.TypeName());
-        writer.WritePropertyName("name");
-        writer.WriteValue(node.Name);
-        writer.WritePropertyName("numParams");
-        writer.WriteValue(node.NumParams);
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(node);
+
+        writer.WriteString("type", node.TypeName() ?? string.Empty);
+        writer.WriteString("name", node.Name ?? string.Empty);
+        writer.WriteNumber("numParams", node.NumParams);
+
         writer.WritePropertyName("nodeDb");
-        Visit(node.DatabaseRef);
+        if (node.DatabaseRef is not null) Visit(writer, node.DatabaseRef);
     }
 
-    public void Visit(QueryNode node)
+    public static void Visit(Utf8JsonWriter writer, QueryNode node)
     {
-        Visit(node as Node);
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(node);
+
+        Visit(writer, (Node)node);
     }
 
-    public void Visit(JoinNode node)
+    public static void Visit(Utf8JsonWriter writer, JoinNode node)
     {
-        Visit(node as Node);
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(node);
+
+        Visit(writer, (Node)node);
 
         writer.WritePropertyName("left");
         writer.WriteStartObject();
         writer.WritePropertyName("parent");
-        Visit(node.LeftParentRef);
+        if (node.LeftParentRef is not null) Visit(writer, node.LeftParentRef);
         writer.WritePropertyName("adapter");
-        Visit(node.LeftAdapterRef);
+        if (node.LeftAdapterRef is not null) Visit(writer, node.LeftAdapterRef);
         writer.WritePropertyName("databaseNode");
-        Visit(node.LeftDatabaseNodeRef);
+        if (node.LeftDatabaseNodeRef is not null) Visit(writer, node.LeftDatabaseNodeRef);
         writer.WritePropertyName("databaseJoin");
-        Visit(node.LeftDatabaseJoin);
-        writer.WritePropertyName("databaseIndirection");
-        writer.WriteValue(node.LeftDatabaseIndirection);
+        if (node.LeftDatabaseJoin is not null) Visit(writer, node.LeftDatabaseJoin);
+        writer.WriteNumber("databaseIndirection", node.LeftDatabaseIndirection);
         writer.WriteEndObject();
 
         writer.WritePropertyName("right");
         writer.WriteStartObject();
         writer.WritePropertyName("parent");
-        Visit(node.RightParentRef);
+        if (node.RightParentRef is not null) Visit(writer, node.RightParentRef);
         writer.WritePropertyName("adapter");
-        Visit(node.RightAdapterRef);
+        if (node.RightAdapterRef is not null) Visit(writer, node.RightAdapterRef);
         writer.WritePropertyName("databaseNode");
-        Visit(node.RightDatabaseNodeRef);
+        if (node.RightDatabaseNodeRef is not null) Visit(writer, node.RightDatabaseNodeRef);
         writer.WritePropertyName("databaseJoin");
-        Visit(node.RightDatabaseJoin);
-        writer.WritePropertyName("databaseIndirection");
-        writer.WriteValue(node.RightDatabaseIndirection);
+        if (node.RightDatabaseJoin is not null) Visit(writer, node.RightDatabaseJoin);
+        writer.WriteNumber("databaseIndirection", node.RightDatabaseIndirection);
         writer.WriteEndObject();
     }
 
-    public void Visit(DataNode node)
+    public static void Visit(Utf8JsonWriter writer, DataNode node)
     {
-        Visit(node as Node);
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(node);
+
+        Visit(writer, (Node)node);
 
         writer.WritePropertyName("references");
         writer.WriteStartArray();
-        foreach (var r in node.ReferencedBy)
+        foreach (NodeEntryItem r in node.ReferencedBy)
         {
-            Visit(r);
+            if (r is not null) Visit(writer, r);
         }
         writer.WriteEndArray();
     }
 
-    public void Visit(Tuple tuple)
+    public static void Visit(Utf8JsonWriter writer, Tuple tuple)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(tuple);
+
         writer.WriteStartObject();
-        var keys = tuple.Logical.Keys.ToArray();
-        for (var i = 0; i < tuple.Logical.Count; i++)
+        int count = tuple.Logical.Count;
+        if (count > 0)
         {
-            writer.WritePropertyName(keys[i].ToString());
-            VisitVar(tuple.Logical[keys[i]]);
+            int i = 0;
+            foreach (KeyValuePair<int, Value> pair in tuple.Logical)
+            {
+                writer.WritePropertyName(pair.Key.ToString(CultureInfo.InvariantCulture));
+                if (pair.Value is not null) VisitVar(writer, pair.Value);
+                i++;
+            }
         }
         writer.WriteEndObject();
     }
 
-    public void Visit(Adapter adapter)
+    public static void Visit(Utf8JsonWriter writer, Adapter adapter)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(adapter);
+
         writer.WriteStartObject();
+
+        Tuple? constants = adapter.Constants;
         writer.WritePropertyName("constants");
-        Visit(adapter.Constants);
+        if (constants is not null)
+        {
+            Visit(writer, constants);
+        }
 
         writer.WritePropertyName("logical");
         writer.WriteStartArray();
-        foreach (var index in adapter.LogicalIndices)
+        foreach (sbyte index in adapter.LogicalIndices)
         {
-            writer.WriteValue(index);
+            writer.WriteNumberValue(index);
         }
         writer.WriteEndArray();
 
         writer.WritePropertyName("mappings");
         writer.WriteStartObject();
-        foreach (var index in adapter.LogicalToPhysicalMap)
+        foreach (KeyValuePair<byte, byte> pair in adapter.LogicalToPhysicalMap)
         {
-            writer.WritePropertyName(index.Key.ToString());
-            writer.WriteValue(index.Value);
+            writer.WritePropertyName(pair.Key.ToString(CultureInfo.InvariantCulture));
+            writer.WriteNumberValue(pair.Value);
         }
         writer.WriteEndObject();
 
         writer.WritePropertyName("output");
         writer.WriteStartArray();
-        for (var i = 0; i < adapter.LogicalIndices.Count; i++)
+        for (int i = 0; i < adapter.LogicalIndices.Count; i++)
         {
-            var index = adapter.LogicalIndices[i];
-            // If a logical index is present, emit a column from the input tuple
+            sbyte index = adapter.LogicalIndices[i];
             if (index != -1)
             {
-                writer.WriteValue(String.Format("input[{0}]", index));
+                writer.WriteStringValue($"input[{index}]");
             }
-            // Otherwise check if a constant is mapped to the specified logical index
-            else if (adapter.Constants.Logical.ContainsKey(i))
+            else if (constants is not null && constants.Logical.TryGetValue(i, out Value? value))
             {
-                var value = adapter.Constants.Logical[i];
-                VisitVar(value);
+                if (value is not null) VisitVar(writer, value);
             }
-            // If we haven't found a constant, emit a null variable
             else
             {
-                writer.WriteNull();
+                writer.WriteNullValue();
             }
         }
         writer.WriteEndArray();
@@ -445,87 +506,108 @@ public class StoryDebugExportVisitor
         writer.WriteEndObject();
     }
 
-    public void Visit(ParameterList args)
+    public static void Visit(Utf8JsonWriter writer, ParameterList args)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(args);
+
         writer.WriteStartArray();
-        foreach (var arg in args.Types)
+        foreach (uint arg in args.Types)
         {
-            writer.WriteValue(arg);
+            writer.WriteNumberValue(arg);
         }
         writer.WriteEndArray();
     }
 
-    public void Visit(Fact fact)
+    public static void Visit(Utf8JsonWriter writer, Fact fact)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(fact);
+
         writer.WriteStartArray();
-        foreach (var val in fact.Columns)
+        foreach (Value val in fact.Columns)
         {
-            VisitVar(val);
+            if (val is not null) VisitVar(writer, val);
         }
         writer.WriteEndArray();
     }
 
-    public void Visit(FactCollection facts)
+    public static void Visit(Utf8JsonWriter writer, FactCollection facts)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(facts);
+
         writer.WriteStartArray();
-        foreach (var fact in facts)
+        foreach (Fact fact in facts)
         {
-            Visit(fact);
+            if (fact is not null) Visit(writer, fact);
         }
         writer.WriteEndArray();
     }
 
-    public void Visit(Database db)
+    public static void Visit(Utf8JsonWriter writer, Database db)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(db);
+
         writer.WriteStartObject();
         writer.WritePropertyName("columns");
-        Visit(db.Parameters);
+        if (db.Parameters is not null) Visit(writer, db.Parameters);
         writer.WritePropertyName("facts");
-        Visit(db.Facts);
+        if (db.Facts is not null) Visit(writer, db.Facts);
         writer.WriteEndObject();
     }
 
-    public void Visit(Call call)
+    public static void Visit(Utf8JsonWriter writer, Call call)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(call);
+
         writer.WriteStartObject();
-        writer.WritePropertyName("negate");
-        writer.WriteValue(call.Negate);
-        writer.WritePropertyName("name");
-        writer.WriteValue(call.Name);
-        if (call.Parameters != null)
+        writer.WriteBoolean("negate", call.Negate);
+        writer.WriteString("name", call.Name ?? string.Empty);
+
+        if (call.Parameters is { Count: > 0 })
         {
             writer.WritePropertyName("params");
             writer.WriteStartArray();
-            foreach (var arg in call.Parameters)
+            foreach (TypedValue arg in call.Parameters)
             {
-                VisitVar(arg);
+                if (arg is not null) VisitVar(writer, arg);
             }
             writer.WriteEndArray();
         }
         writer.WriteEndObject();
     }
 
-    public void Visit(List<Call> calls)
+    public static void Visit(Utf8JsonWriter writer, List<Call> calls)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(calls);
+
         writer.WriteStartArray();
-        foreach (var call in calls)
+        foreach (Call call in calls)
         {
-            Visit(call);
+            if (call is not null) Visit(writer, call);
         }
         writer.WriteEndArray();
     }
 
-    public void Visit(Goal goal)
+    public static void Visit(Utf8JsonWriter writer, Goal goal)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(goal);
+
         writer.WriteStartObject();
-        writer.WritePropertyName("name");
-        writer.WriteValue(goal.Name);
-        writer.WritePropertyName("sgc");
-        writer.WriteValue(goal.SubGoalCombination);
+        writer.WriteString("name", goal.Name ?? string.Empty);
+        writer.WriteNumber("sgc", goal.SubGoalCombination);
+
         writer.WritePropertyName("init");
-        Visit(goal.InitCalls);
+        if (goal.InitCalls is not null) Visit(writer, goal.InitCalls);
+
         writer.WritePropertyName("exit");
-        Visit(goal.ExitCalls);
+        if (goal.ExitCalls is not null) Visit(writer, goal.ExitCalls);
+
         writer.WriteEndObject();
     }
 }

@@ -2,9 +2,9 @@
 
 public class ProcNode : DataNode
 {
-    public override Type NodeType()
+    public override Node.Type NodeType()
     {
-        return Type.Proc;
+        return Node.Type.Proc;
     }
 
     public override string TypeName()
@@ -14,7 +14,11 @@ public class ProcNode : DataNode
 
     public override void MakeScript(TextWriter writer, Story story, Tuple tuple, bool printTypes)
     {
-        writer.Write("{0}(", Name);
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(story);
+        ArgumentNullException.ThrowIfNull(tuple);
+
+        writer.Write("{0}(", Name ?? string.Empty);
         tuple.MakeScript(writer, story, true);
         writer.WriteLine(")");
     }

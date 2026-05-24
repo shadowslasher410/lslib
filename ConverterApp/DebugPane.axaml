@@ -1,0 +1,74 @@
+<rxui:ReactiveUserControl xmlns="https://github.com/avaloniaui"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         xmlns:views="using:LSTools.DivineGUI"
+						 xmlns:compiler="using:LSLib.LS.Story.Compiler"
+                         xmlns:i="clr-namespace:Avalonia.Xaml.Interactivity;assembly=Xaml.Behaviors.Avalonia"
+                         xmlns:ia="clr-namespace:Avalonia.Xaml.Interactions.Core;assembly=Xaml.Behaviors.Avalonia"
+                         xmlns:rxui="clr-namespace:Avalonia.ReactiveUI;assembly=Avalonia.ReactiveUI"
+                         x:Class="LSTools.DivineGUI.DebugPane"
+                         x:DataType="views:DebugPane">
+
+	<Grid RowDefinitions="Auto,Auto,*,Auto" Margin="16" RowSpacing="12">
+
+		<HeaderedContentControl Grid.Row="0" Header="Target Savegame Archive" Theme="{StaticResource GroupBoxTheme}">
+			<Grid ColumnDefinitions="*,Auto" Margin="12" ColumnSpacing="8">
+				<TextBox Grid.Column="0" Text="{Binding SaveFilePath}" PlaceholderText="Select game save package container (.lsv) file..." VerticalAlignment="Center" />
+				<Button Grid.Column="1" Content="..." Width="50" Command="{Binding SaveFileBrowseCommand}" />
+			</Grid>
+		</HeaderedContentControl>
+
+		<HeaderedContentControl Grid.Row="1" Header="Diagnostic Analysis Metrics" Theme="{StaticResource GroupBoxTheme}">
+			<Grid RowDefinitions="Auto,Auto" ColumnDefinitions="Auto,Auto,Auto,Auto" Margin="12" RowSpacing="8" ColumnSpacing="16">
+				<CheckBox Grid.Row="0" Grid.Column="0" Content="Extract Archives" IsChecked="{Binding ExtractAll}" />
+				<CheckBox Grid.Row="0" Grid.Column="1" Content="Convert LSF to LSX" IsChecked="{Binding ConvertToLsx}" />
+				<CheckBox Grid.Row="0" Grid.Column="2" Content="Dump Active Mods" IsChecked="{Binding DumpModList}" />
+				<CheckBox Grid.Row="0" Grid.Column="3" Content="Dump Script Globals" IsChecked="{Binding DumpGlobalVars}" />
+
+				<CheckBox Grid.Row="1" Grid.Column="0" Content="Dump Characters" IsChecked="{Binding DumpCharacterVars}" />
+				<CheckBox Grid.Row="1" Grid.Column="1" Content="Dump Items" IsChecked="{Binding DumpItemVars}" />
+				<CheckBox Grid.Row="1" Grid.Column="2" Content="Include Deleted Data" IsChecked="{Binding IncludeDeletedVars}" />
+				<CheckBox Grid.Row="1" Grid.Column="3" Content="Rule Databases" IsChecked="{Binding DumpStoryDatabases}" />
+			</Grid>
+		</HeaderedContentControl>
+
+		<Grid Grid.Row="2" RowDefinitions="*,Auto" RowSpacing="12">
+			<DataGrid Grid.Row="0"
+					  ItemsSource="{Binding DiagnosticLogs}"
+					  AutoGenerateColumns="False"
+					  IsReadOnly="True"
+					  GridLinesVisibility="All"
+					  BorderThickness="1"
+					  BorderBrush="{DynamicResource SystemControlTransientBorderBrush}">
+				<DataGrid.Columns>
+					<DataGridTextColumn Header="Code" Binding="{Binding Code}" Width="120" />
+					<DataGridTextColumn Header="Severity Level" Binding="{Binding Level}" Width="130" />
+
+					<DataGridTemplateColumn Header="Location Reference" Width="180">
+						<DataGridTemplateColumn.CellTemplate>
+							<DataTemplate x:DataType="compiler:Diagnostic">
+								<TextBlock Text="{Binding Location, TargetNullValue='Global/Runtime'}"
+										   Margin="12,6"
+										   VerticalAlignment="Center"/>
+							</DataTemplate>
+						</DataGridTemplateColumn.CellTemplate>
+					</DataGridTemplateColumn>
+
+					<DataGridTextColumn Header="Log Message Detail" Binding="{Binding Message}" Width="*" />
+				</DataGrid.Columns>
+			</DataGrid>
+
+			<Button Grid.Row="1" Content="Dump Diagnostics" Width="220" Command="{Binding DumpVariablesCommand}" Theme="{StaticResource AccentButtonTheme}" />
+		</Grid>
+
+		<Grid Grid.Row="3" RowDefinitions="Auto,Auto" RowSpacing="6"
+              IsVisible="{Binding ProgressStatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+			<Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,*,Auto">
+				<TextBlock Grid.Column="0" Text="Progress: " FontWeight="SemiBold"/>
+				<TextBlock Grid.Column="1" Text="{Binding ProgressStatusText}" />
+				<TextBlock Grid.Column="3" Text="{Binding ProgressPercentage, StringFormat={}{0:0}%}" />
+			</Grid>
+			<ProgressBar Grid.Row="1" Value="{Binding ProgressPercentage}" Minimum="0" Maximum="100" Height="16" />
+		</Grid>
+
+	</Grid>
+</rxui:ReactiveUserControl>

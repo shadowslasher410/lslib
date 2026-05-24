@@ -1,23 +1,26 @@
 ﻿using LSLib.LS.Story.GoalParser;
 using LSLib.Parser;
+using System.Globalization;
 
 namespace LSLib.LS.Story.Compiler;
 
 /// <summary>
 /// Generates IR from story AST.
 /// </summary>
-public class IRGenerator
+public class IRGenerator(CompilationContext context)
 {
-    private CompilationContext Context;
-    public CodeLocation LastLocation;
+    private readonly CompilationContext _context = context ?? throw new ArgumentNullException(nameof(context));
+    public CodeLocation? LastLocation { get; set; }
 
-    public IRGenerator(CompilationContext context)
+    public IRGoal GenerateIR(ASTGoal astGoal)
     {
-        Context = context;
+        return ASTGoalToIR(astGoal);
     }
 
     private IRGoal ASTGoalToIR(ASTGoal astGoal)
     {
+        ArgumentNullException.ThrowIfNull(astGoal);
+
         var goal = new IRGoal
         {
             InitSection = new List<IRFact>(astGoal.InitSection.Count),
@@ -29,24 +32,28 @@ public class IRGenerator
 
         foreach (var fact in astGoal.InitSection)
         {
-            goal.InitSection.Add(ASTFactToIR(goal, fact));
+            if (fact is not null) goal.InitSection.Add(ASTFactToIR(goal, fact));
         }
 
         foreach (var rule in astGoal.KBSection)
         {
-            goal.KBSection.Add(ASTRuleToIR(goal, rule));
+            if (rule is not null) goal.KBSection.Add(ASTRuleToIR(goal, rule));
         }
 
         foreach (var fact in astGoal.ExitSection)
         {
-            goal.ExitSection.Add(ASTFactToIR(goal, fact));
+            if (fact is not null) goal.ExitSection.Add(ASTFactToIR(goal, fact));
         }
 
         foreach (var refGoal in astGoal.ParentTargetEdges)
         {
-            var edge = new IRTargetEdge();
-            edge.Goal = new IRGoalRef(refGoal.Goal);
-            edge.Location = refGoal.Location;
+            if (refGoal is null) continue;
+
+            var edge = new IRTargetEdge
+            {
+                Goal = new IRGoalRef(refGoal.Goal ?? string.Empty),
+                Location = refGoal.Location
+            };
             goal.ParentTargetEdges.Add(edge);
         }
 
@@ -55,25 +62,28 @@ public class IRGenerator
 
     private IRRule ASTRuleToIR(IRGoal goal, ASTRule astRule)
     {
+        ArgumentNullException.ThrowIfNull(goal);
+        ArgumentNullException.ThrowIfNull(astRule);
+
         var rule = new IRRule
         {
             Goal = goal,
             Type = astRule.Type,
             Conditions = new List<IRCondition>(astRule.Conditions.Count),
             Actions = new List<IRStatement>(astRule.Actions.Count),
-            Variables = new List<IRRuleVariable>(),
-            VariablesByName = new Dictionary<String, IRRuleVariable>(),
+            Variables = [],
+            VariablesByName = new Dictionary<string, IRRuleVariable>(StringComparer.OrdinalIgnoreCase),
             Location = astRule.Location
         };
 
         foreach (var condition in astRule.Conditions)
         {
-            rule.Conditions.Add(ASTConditionToIR(rule, condition));
+            if (condition is not null) rule.Conditions.Add(ASTConditionToIR(rule, condition));
         }
 
         foreach (var action in astRule.Actions)
         {
-            rule.Actions.Add(ASTActionToIR(rule, action));
+            if (action is not null) rule.Actions.Add(ASTActionToIR(rule, action));
         }
 
         return rule;
@@ -81,24 +91,26 @@ public class IRGenerator
 
     private IRStatement ASTActionToIR(IRRule rule, ASTAction astAction)
     {
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(astAction);
+
         if (astAction is ASTGoalCompletedAction)
         {
-            var astGoal = astAction as ASTGoalCompletedAction;
             return new IRStatement
             {
-                Func = null,
+                Func = null!,
                 Goal = rule.Goal,
                 Not = false,
-                Params = new List<IRValue>(),
+                Params = [],
                 Location = astAction.Location
             };
         }
-        else if (astAction is ASTStatement)
+
+        if (astAction is ASTStatement astStmt)
         {
-            var astStmt = astAction as ASTStatement;
             var stmt = new IRStatement
             {
-                Func = new IRSymbolRef(new FunctionNameAndArity(astStmt.Name, astStmt.Params.Count)),
+                Func = new IRSymbolRef(new FunctionNameAndArity(astStmt.Name ?? string.Empty, astStmt.Params.Count)),
                 Goal = null,
                 Not = astStmt.Not,
                 Params = new List<IRValue>(astStmt.Params.Count),
@@ -107,25 +119,25 @@ public class IRGenerator
 
             foreach (var param in astStmt.Params)
             {
-                stmt.Params.Add(ASTValueToIR(rule, param));
+                if (param is not null) stmt.Params.Add(ASTValueToIR(rule, param));
             }
 
             return stmt;
         }
-        else
-        {
-            throw new InvalidOperationException("Cannot convert unknown AST condition type to IR");
-        }
+
+        throw new InvalidOperationException("Cannot convert unknown AST action type statement parameters to IR targets.");
     }
 
     private IRCondition ASTConditionToIR(IRRule rule, ASTCondition astCondition)
     {
-        if (astCondition is ASTFuncCondition)
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(astCondition);
+
+        if (astCondition is ASTFuncCondition astFunc)
         {
-            var astFunc = astCondition as ASTFuncCondition;
             var func = new IRFuncCondition
             {
-                Func = new IRSymbolRef(new FunctionNameAndArity(astFunc.Name, astFunc.Params.Count)),
+                Func = new IRSymbolRef(new FunctionNameAndArity(astFunc.Name ?? string.Empty, astFunc.Params.Count)),
                 Not = astFunc.Not,
                 Params = new List<IRValue>(astFunc.Params.Count),
                 TupleSize = -1,
@@ -134,77 +146,72 @@ public class IRGenerator
 
             foreach (var param in astFunc.Params)
             {
-                func.Params.Add(ASTValueToIR(rule, param));
+                if (param is not null) func.Params.Add(ASTValueToIR(rule, param));
             }
 
             return func;
         }
-        else if (astCondition is ASTBinaryCondition)
+
+        if (astCondition is ASTBinaryCondition astBin)
         {
-            var astBin = astCondition as ASTBinaryCondition;
             return new IRBinaryCondition
             {
                 LValue = ASTValueToIR(rule, astBin.LValue),
-                Op = astBin.Op,
+                Op = (RelOpType)astBin.Op,
                 RValue = ASTValueToIR(rule, astBin.RValue),
                 TupleSize = -1,
                 Location = astCondition.Location
             };
         }
-        else
-        {
-            throw new InvalidOperationException("Cannot convert unknown AST condition type to IR");
-        }
+
+        throw new InvalidOperationException("Cannot convert unknown AST condition type configuration mapping parameters to IR targets.");
     }
 
     private IRValue ASTValueToIR(IRRule rule, ASTRValue astValue)
     {
-        if (astValue is ASTConstantValue)
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(astValue);
+
+        if (astValue is ASTConstantValue constantValue)
         {
-            return ASTConstantToIR(astValue as ASTConstantValue);
+            return ASTConstantToIR(constantValue);
         }
-        else if (astValue is ASTLocalVar)
+
+        if (astValue is ASTLocalVar astVar)
         {
-            var astVar = astValue as ASTLocalVar;
-            // TODO - compiler error if type resolution fails
-            ValueType type;
-            if (astVar.Type != null)
+            ValueType? type = null;
+            if (astVar.Type is not null)
             {
-                type = Context.LookupType(astVar.Type);
-                if (type == null)
+                type = _context.LookupType(astVar.Type);
+                if (type is null)
                 {
-                    Context.Log.Error(astVar.Location, DiagnosticCode.UnresolvedType,
-                        String.Format("Type \"{0}\" does not exist", astVar.Type));
+                    _context.Log.Error(astVar.Location, DiagnosticCode.UnresolvedType,
+                       string.Format(CultureInfo.InvariantCulture, "Type \"{0}\" does not exist across compilation tables definitions.", astVar.Type));
                 }
             }
-            else
-            {
-                type = null;
-            }
 
-            var ruleVar = rule.FindOrAddVariable(astVar.Name, type);
+            var ruleVar = rule.FindOrAddVariable(astVar.Name ?? string.Empty, type ?? new ValueType { Name = "UNKNOWN" });
 
             return new IRVariable
             {
                 Index = ruleVar.Index,
-                Type = type,
+                Type = type!,
                 Location = astValue.Location
             };
         }
-        else
-        {
-            throw new InvalidOperationException("Cannot convert unknown AST value type to IR");
-        }
+
+        throw new InvalidOperationException("Cannot convert unknown AST value parameter configuration to IR targets.");
     }
 
     private IRFact ASTFactToIR(IRGoal goal, ASTBaseFact astFact)
     {
-        if (astFact is ASTFact)
+        ArgumentNullException.ThrowIfNull(astFact);
+
+        if (astFact is ASTFact f)
         {
-            var f = astFact as ASTFact;
             var fact = new IRFact
             {
-                Database = new IRSymbolRef(new FunctionNameAndArity(f.Database, f.Elements.Count)),
+                Database = new IRSymbolRef(new FunctionNameAndArity(f.Database ?? string.Empty, f.Elements.Count)),
                 Not = f.Not,
                 Elements = new List<IRConstant>(f.Elements.Count),
                 Goal = null,
@@ -213,54 +220,54 @@ public class IRGenerator
 
             foreach (var element in f.Elements)
             {
-                fact.Elements.Add(ASTConstantToIR(element));
+                if (element is not null) fact.Elements.Add(ASTConstantToIR(element));
             }
 
             return fact;
         }
-        else if (astFact is ASTGoalCompletedFact)
+
+        if (astFact is ASTGoalCompletedFact fCompleted)
         {
-            var f = astFact as ASTGoalCompletedFact;
             return new IRFact
             {
-                Database = null,
+                Database = null!,
                 Not = false,
-                Elements = new List<IRConstant>(),
+                Elements = [],
                 Goal = goal,
-                Location = f.Location
+                Location = fCompleted.Location
             };
         }
-        else
-        {
-            throw new InvalidOperationException("Cannot convert unknown AST fact type to IR");
-        }
+
+        throw new InvalidOperationException("Cannot convert unknown AST fact node parameter mapping elements to IR targets.");
     }
 
-    // TODO - un-copy + move to constant code?
-    private ValueType ConstantTypeToValueType(IRConstantType type)
+    private ValueType? ConstantTypeToValueType(IRConstantType type)
     {
-        switch (type)
+        return type switch
         {
-            case IRConstantType.Unknown: return null;
-            // TODO - lookup type ID from enum
-            case IRConstantType.Integer: return Context.TypesById[1];
-            case IRConstantType.Float: return Context.TypesById[3];
-            case IRConstantType.String: return Context.TypesById[4];
-            case IRConstantType.Name: return Context.TypesById[5];
-            default: throw new ArgumentException("Invalid IR constant type");
-        }
+            IRConstantType.Unknown => null,
+            IRConstantType.Integer => _context.TypesById.TryGetValue((uint)Value.Type.Integer, out var t1) ? t1 : null,
+            IRConstantType.Float => _context.TypesById.TryGetValue((uint)Value.Type.Float, out var t3) ? t3 : null,
+            IRConstantType.String => _context.TypesById.TryGetValue((uint)Value.Type.String, out var t4) ? t4 : null,
+            IRConstantType.Name => _context.TypesById.TryGetValue((uint)Value.Type.GuidString, out var t5) ? t5 : null,
+            _ => throw new ArgumentOutOfRangeException(nameof(type), type, "Invalid or unsupported IR constant type parameter validation context criteria specified.")
+        };
     }
-
+    /// <summary>
+    /// Converts an Abstract Syntax Tree (AST) constant value node into its Intermediate Representation (IR) equivalent.
+    /// </summary>
     private IRConstant ASTConstantToIR(ASTConstantValue astConstant)
     {
-        ValueType type;
-        if (astConstant.TypeName != null)
+        ArgumentNullException.ThrowIfNull(astConstant);
+
+        ValueType? type;
+        if (astConstant.TypeName is not null)
         {
-            type = Context.LookupType(astConstant.TypeName);
-            if (type == null)
+            type = _context.LookupType(astConstant.TypeName);
+            if (type is null)
             {
-                Context.Log.Error(astConstant.Location, DiagnosticCode.UnresolvedType,
-                    String.Format("Type \"{0}\" does not exist", astConstant.TypeName));
+                _context.Log.Error(astConstant.Location, DiagnosticCode.UnresolvedType,
+                    string.Format(CultureInfo.InvariantCulture, "Type \"{0}\" does not exist across compilation tables definitions.", astConstant.TypeName));
             }
         }
         else
@@ -271,35 +278,46 @@ public class IRGenerator
         return new IRConstant
         {
             ValueType = astConstant.Type,
-            Type = type,
-            InferredType = astConstant.TypeName != null,
+            Type = type ?? new ValueType { Name = "UNKNOWN" },
+            InferredType = astConstant.TypeName is not null,
             IntegerValue = astConstant.IntegerValue,
             FloatValue = astConstant.FloatValue,
-            StringValue = astConstant.StringValue,
+            StringValue = astConstant.StringValue ?? string.Empty,
             Location = astConstant.Location
         };
     }
 
-    public ASTGoal ParseGoal(String path, Stream stream)
-    {
-        var scanner = new GoalScanner(path);
-        scanner.SetSource(stream);
-        var parser = new GoalParser.GoalParser(scanner);
-        bool parsed = parser.Parse();
 
-        if (parsed)
+    public ASTGoal? ParseGoal(string path, Stream stream)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        ArgumentNullException.ThrowIfNull(stream);
+
+        try
         {
-            return parser.GetGoal();
+            using var reader = new StreamReader(stream, leaveOpen: true);
+            string sourceText = reader.ReadToEnd();
+
+            var scanner = new GoalScanner(path, sourceText);
+
+            GoalParser.GoalParser parser = new(scanner);
+
+            return parser.Parse();
         }
-        else
+        catch (InvalidDataException)
         {
-            this.LastLocation = scanner.LastLocation();
+            stream.Seek(0, SeekOrigin.Begin);
+            using var reader = new StreamReader(stream, leaveOpen: true);
+            var scanner = new GoalScanner(path, reader.ReadToEnd());
+
+            LastLocation = scanner.LastLocation();
             return null;
         }
     }
 
     public IRGoal GenerateGoalIR(ASTGoal goal)
     {
+        ArgumentNullException.ThrowIfNull(goal);
         return ASTGoalToIR(goal);
     }
 }

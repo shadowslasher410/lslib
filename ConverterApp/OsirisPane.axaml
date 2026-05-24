@@ -1,0 +1,82 @@
+<rxui:ReactiveUserControl xmlns="https://github.com/avaloniaui"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         xmlns:views="using:LSTools.DivineGUI"
+                         xmlns:rxui="clr-namespace:Avalonia.ReactiveUI;assembly=Avalonia.ReactiveUI"
+                         x:Class="LSTools.DivineGUI.OsirisPane"
+                         x:DataType="views:OsirisPane">
+
+	<Grid RowDefinitions="Auto,*,Auto" Margin="16" RowSpacing="12">
+
+		<HeaderedContentControl Grid.Row="0" Header="Story / Savegame Parameters" Theme="{StaticResource GroupBoxTheme}">
+			<Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnDefinitions="*,Auto,Auto" Margin="12" RowSpacing="6" ColumnSpacing="8">
+
+				<TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3" Text="Story/savegame file path:" />
+				<TextBox Grid.Row="1" Grid.Column="0" Text="{Binding StoryFilePath}" PlaceholderText="Select story binary or savegame (.osi, .lsv)..." VerticalAlignment="Center" />
+				<Button Grid.Row="1" Grid.Column="1" Content="..." Width="45" Command="{Binding BrowseStoryFileCommand}" />
+				<Button Grid.Row="1" Grid.Column="2" Content="Load" Width="120" Command="{Binding LoadStoryCommand}" />
+
+				<TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3" Text="Goal output path:" Margin="0,4,0,0" />
+				<TextBox Grid.Row="3" Grid.Column="0" Text="{Binding GoalOutputPath}" PlaceholderText="Select directory destination for unpacked goals..." VerticalAlignment="Center" />
+				<Button Grid.Row="3" Grid.Column="1" Content="..." Width="45" Command="{Binding BrowseGoalFolderCommand}" />
+
+				<Grid Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="3" Margin="0,8,0,0"
+                      ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="8" VerticalAlignment="Center">
+					<Button Grid.Column="0" Content="Save" Width="120" Command="{Binding SaveStoryCommand}" />
+					<Button Grid.Column="1" Content="Extract" Width="120" Command="{Binding DecompileStoryCommand}" Theme="{StaticResource AccentButtonTheme}" />
+					<Button Grid.Column="3" Content="Debug Export" Width="120" Command="{Binding ExportDebugJsonCommand}" />
+				</Grid>
+			</Grid>
+		</HeaderedContentControl>
+
+		<HeaderedContentControl Grid.Row="1" Header="Database Editor" Theme="{StaticResource GroupBoxTheme}">
+			<Grid RowDefinitions="Auto,*" Margin="12" RowSpacing="8">
+
+				<Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="8" VerticalAlignment="Center">
+					<TextBlock Grid.Column="0" Text="Database:" VerticalAlignment="Center" />
+					<ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding FilteredDatabaseItems}"
+                              SelectedItem="{Binding SelectedDatabase}" />
+
+					<TextBlock Grid.Column="2" Text="Filter:" VerticalAlignment="Center" Margin="12,0,0,0" />
+					<TextBox Grid.Column="3" Width="200" Text="{Binding FilterText}" PlaceholderText="Search database records...">
+						<Interaction.Behaviors>
+							<EventTriggerBehavior EventName="TextChanged">
+								<InvokeCommandAction Command="{Binding ApplyFilterCommand}" />
+							</EventTriggerBehavior>
+						</Interaction.Behaviors>
+					</TextBox>
+
+					<ToggleButton Grid.Column="4" Content="Aa" IsChecked="{Binding MatchCaseFilter}" Width="40" HorizontalContentAlignment="Center" />
+				</Grid>
+
+				<DataGrid Grid.Row="1" Name="databaseGrid"
+                          ItemsSource="{Binding GridFactRows}"
+                          AutoGenerateColumns="False"
+                          IsReadOnly="True"
+                          GridLinesVisibility="All"
+                          BorderThickness="1"
+                          BorderBrush="{DynamicResource SystemControlTransientBorderBrush}">
+					<DataGrid.Columns>
+
+						<DataGridTextColumn Header="Internal Fact Type"
+                                            Binding="{Binding FactInstance}"
+                                            Width="150" />
+
+						<DataGridTextColumn Header="Arguments / Factual Parameters" Binding="{Binding ArgumentsValue}" Width="*" />
+
+					</DataGrid.Columns>
+				</DataGrid>
+
+			</Grid>
+		</HeaderedContentControl>
+
+		<Grid Grid.Row="2" RowDefinitions="Auto,Auto" RowSpacing="4" IsVisible="{Binding IsDecompileProcessing}">
+			<Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+				<TextBlock Grid.Column="0" Text="{Binding ProgressStatusText}" FontWeight="SemiBold" />
+				<TextBlock Grid.Column="1" Text="Processing Task..." Classes="HintText" />
+			</Grid>
+			<ProgressBar Grid.Row="1" IsIndeterminate="True" Height="4" />
+		</Grid>
+
+	</Grid>
+</rxui:ReactiveUserControl>

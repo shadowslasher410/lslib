@@ -1,26 +1,23 @@
 ﻿namespace LSLib.LS.Story;
 
-public class Goal : OsirisSerializable
+public class Goal(Story story) : IOsirisSerializable
 {
-    public UInt32 Index;
-    public string Name;
-    public byte SubGoalCombination;
-    public List<GoalReference> ParentGoals;
-    public List<GoalReference> SubGoals;
-    public byte Flags; // 0x02 = Child goal
-    public List<Call> InitCalls;
-    public List<Call> ExitCalls;
-    public Story Story;
-
-    public Goal(Story story)
-    {
-        Story = story;
-    }
+    public uint Index { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public byte SubGoalCombination { get; set; }
+    public List<GoalReference> ParentGoals { get; set; } = [];
+    public List<GoalReference> SubGoals { get; set; } = [];
+    public byte Flags { get; set; } // 0x02 = Child goal
+    public List<Call> InitCalls { get; set; } = [];
+    public List<Call> ExitCalls { get; set; } = [];
+    public Story Story { get; set; } = story ?? throw new ArgumentNullException(nameof(story));
 
     public void Read(OsiReader reader)
     {
+        ArgumentNullException.ThrowIfNull(reader);
+
         Index = reader.ReadUInt32();
-        Name = reader.ReadString();
+        Name = reader.ReadString() ?? string.Empty;
         SubGoalCombination = reader.ReadByte();
 
         ParentGoals = reader.ReadRefList<GoalReference, Goal>();
@@ -35,40 +32,47 @@ public class Goal : OsirisSerializable
         }
         else
         {
-            InitCalls = new List<Call>();
-            ExitCalls = new List<Call>();
+            InitCalls = [];
+            ExitCalls = [];
         }
     }
 
     public void Write(OsiWriter writer)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+
         writer.Write(Index);
         writer.Write(Name);
         writer.Write(SubGoalCombination);
 
-        writer.WriteList<GoalReference>(ParentGoals);
-        writer.WriteList<GoalReference>(SubGoals);
+        writer.WriteList(ParentGoals);
+        writer.WriteList(SubGoals);
 
         writer.Write(Flags);
 
         if (writer.Ver >= OsiVersion.VerAddInitExitCalls)
         {
-            writer.WriteList<Call>(InitCalls);
-            writer.WriteList<Call>(ExitCalls);
+            writer.WriteList(InitCalls);
+            writer.WriteList(ExitCalls);
         }
     }
 
     public void DebugDump(TextWriter writer, Story story)
     {
-        writer.WriteLine("{0}: SGC {1}, Flags {2}", Name, SubGoalCombination, Flags);
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(story);
+
+        writer.WriteLine($"{Name}: SubGoalCombiner {SubGoalCombination}, Flags {Flags}");
 
         if (ParentGoals.Count > 0)
         {
             writer.Write("    Parent goals: ");
-            foreach (var goalRef in ParentGoals)
+            foreach (GoalReference goalRef in ParentGoals)
             {
-                var goal = goalRef.Resolve();
-                writer.Write("#{0} {1}, ", goal.Index, goal.Name);
+                if (goalRef?.Resolve() is Goal goal)
+                {
+                    writer.Write($"#{goal.Index} {goal.Name}, ");
+                }
             }
             writer.WriteLine();
         }
@@ -76,10 +80,12 @@ public class Goal : OsirisSerializable
         if (SubGoals.Count > 0)
         {
             writer.Write("    Subgoals: ");
-            foreach (var goalRef in SubGoals)
+            foreach (GoalReference goalRef in SubGoals)
             {
-                var goal = goalRef.Resolve();
-                writer.Write("#{0} {1}, ", goal.Index, goal.Name);
+                if (goalRef?.Resolve() is Goal goal)
+                {
+                    writer.Write($"#{goal.Index} {goal.Name}, ");
+                }
             }
             writer.WriteLine();
         }
@@ -87,8 +93,9 @@ public class Goal : OsirisSerializable
         if (InitCalls.Count > 0)
         {
             writer.WriteLine("    Init Calls: ");
-            foreach (var call in InitCalls)
+            foreach (Call call in InitCalls)
             {
+                if (call is null) continue;
                 writer.Write("        ");
                 call.DebugDump(writer, story);
                 writer.WriteLine();
@@ -98,8 +105,9 @@ public class Goal : OsirisSerializable
         if (ExitCalls.Count > 0)
         {
             writer.WriteLine("    Exit Calls: ");
-            foreach (var call in ExitCalls)
+            foreach (Call call in ExitCalls)
             {
+                if (call is null) continue;
                 writer.Write("        ");
                 call.DebugDump(writer, story);
                 writer.WriteLine();
@@ -109,50 +117,56 @@ public class Goal : OsirisSerializable
 
     public void MakeScript(TextWriter writer, Story story)
     {
-        writer.WriteLine("Version 1");
-        writer.WriteLine("SubGoalCombiner SGC_AND");
-        writer.WriteLine();
-        writer.WriteLine("INITSECTION");
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(story);
 
-        var nullTuple = new Tuple();
-        foreach (var call in InitCalls)
+        writer.WriteLine("Version 1");
+        writer.WriteLine("SubGoalCombiner SubGoalCombinerAnd");
+        writer.WriteLine();
+        writer.WriteLine("InitSection");
+
+        Tuple nullTuple = new();
+
+        foreach (Call call in InitCalls)
         {
+            if (call is null) continue;
             call.MakeScript(writer, story, nullTuple, false);
             writer.WriteLine(";");
         }
 
         writer.WriteLine();
-        writer.WriteLine("KBSECTION");
+        writer.WriteLine("KbSection");
 
-        foreach (var node in story.Nodes)
+        foreach (var (_, nodeValue) in story.Nodes)
         {
-            if (node.Value is RuleNode)
+            if (nodeValue is RuleNode rule &&
+                rule.DerivedGoalRef is { Index: var ruleIndex } &&
+                ruleIndex == Index)
             {
-                var rule = node.Value as RuleNode;
-                if (rule.DerivedGoalRef != null && rule.DerivedGoalRef.Index == Index)
-                {
-                    node.Value.MakeScript(writer, story, nullTuple, false);
-                    writer.WriteLine();
-                }
+                nodeValue.MakeScript(writer, story, nullTuple, false);
+                writer.WriteLine();
             }
         }
 
         writer.WriteLine();
-        writer.WriteLine("EXITSECTION");
+        writer.WriteLine("ExitSection");
 
-        foreach (var call in ExitCalls)
+        foreach (Call call in ExitCalls)
         {
+            if (call is null) continue;
             call.MakeScript(writer, story, nullTuple, false);
             writer.WriteLine(";");
         }
 
-        writer.WriteLine("ENDEXITSECTION");
+        writer.WriteLine("EndExitSection");
         writer.WriteLine();
 
-        foreach (var goalRef in ParentGoals)
+        foreach (GoalReference goalRef in ParentGoals)
         {
-            var goal = goalRef.Resolve();
-            writer.WriteLine("ParentTargetEdge \"{0}\"", goal.Name);
+            if (goalRef?.Resolve() is Goal goal)
+            {
+                writer.WriteLine($"ParentTargetEdge \"{goal.Name}\"");
+            }
         }
     }
 }

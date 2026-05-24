@@ -1,121 +1,139 @@
-﻿namespace LSLib.LS;
+﻿using System.Buffers.Binary;
+using System.Diagnostics.CodeAnalysis;
 
+namespace LSLib.LS;
+
+[UnconditionalSuppressMessage("ReflectionAnalysis", "IL2026:RequiresUnreferencedCode", Justification = "Safe unboxed layout formatting serialization.")]
 public class LSBWriter(Stream stream)
 {
-    private BinaryWriter writer;
-    private Dictionary<string, UInt32> staticStrings = [];
-    private UInt32 nextStaticStringId = 0;
-    private UInt32 Version;
+    private readonly Stream _stream = stream ?? throw new ArgumentNullException(nameof(stream));
+    private BinaryWriter? _writer;
+    private readonly Dictionary<string, uint> _staticStrings = new(StringComparer.Ordinal);
+    private uint _nextStaticStringId;
+    private uint _version;
 
     public void Write(Resource rsrc)
     {
-        Version = rsrc.Metadata.MajorVersion;
-        using (this.writer = new BinaryWriter(stream))
+        ArgumentNullException.ThrowIfNull(rsrc);
+
+        _version = rsrc.Metadata.MajorVersion;
+
+        using var binaryWriter = new BinaryWriter(_stream, Encoding.UTF8, leaveOpen: true);
+        _writer = binaryWriter;
+
+        var header = new LSBHeader
         {
-            var header = new LSBHeader
-            {
-                TotalSize = 0, // Total size of file, will be updater after we finished serializing
-                BigEndian = 0, // Little-endian format
-                Unknown = 0, // Unknown
-                Metadata = rsrc.Metadata
-            };
+            TotalSize = 0,
+            BigEndian = 0,
+            Unknown = 0,
+            Metadata = rsrc.Metadata
+        };
 
-            if (rsrc.Metadata.MajorVersion >= 4)
-            {
-                header.Signature = BitConverter.ToUInt32(LSBHeader.SignatureBG3, 0);
-            }
-            else
-            {
-                header.Signature = LSBHeader.SignatureFW3;
-            }
-
-            BinUtils.WriteStruct(writer, ref header);
-
-            CollectStaticStrings(rsrc);
-            WriteStaticStrings();
-
-            WriteRegions(rsrc);
-
-            header.TotalSize = (UInt32)stream.Position;
-            stream.Seek(0, SeekOrigin.Begin);
-            BinUtils.WriteStruct(writer, ref header);
+        if (rsrc.Metadata.MajorVersion >= 4)
+        {
+            header.Signature = BinaryPrimitives.ReadUInt32LittleEndian(LSBHeader.SignatureBG3);
         }
+        else
+        {
+            header.Signature = LSBHeader.SignatureFW3;
+        }
+
+        BinUtils.WriteStruct(_writer, ref header);
+
+        CollectStaticStrings(rsrc);
+        WriteStaticStrings();
+
+        WriteRegions(rsrc);
+
+        header.TotalSize = (uint)_stream.Position;
+        _stream.Seek(0, SeekOrigin.Begin);
+        BinUtils.WriteStruct(_writer, ref header);
     }
 
     private void WriteRegions(Resource rsrc)
     {
-        writer.Write((UInt32)rsrc.Regions.Count);
-        var regionMapOffset = stream.Position;
+        if (_writer is null) return;
+
+        _writer.Write((uint)rsrc.Regions.Count);
+        long regionMapOffset = _stream.Position;
         foreach (var rgn in rsrc.Regions)
         {
-            writer.Write(staticStrings[rgn.Key]);
-            writer.Write((UInt32)0); // Offset of region, will be updater after we finished serializing
+            _writer.Write(_staticStrings[rgn.Key]);
+            _writer.Write(0u);
         }
 
-        List<UInt32> regionPositions = [];
+        var regionPositions = new List<uint>(rsrc.Regions.Count);
         foreach (var rgn in rsrc.Regions)
         {
-            regionPositions.Add((UInt32)stream.Position);
+            regionPositions.Add((uint)_stream.Position);
             WriteNode(rgn.Value);
         }
 
-        var endOffset = stream.Position;
-        stream.Seek(regionMapOffset, SeekOrigin.Begin);
-        foreach (var position in regionPositions)
+        long endOffset = _stream.Position;
+        _stream.Seek(regionMapOffset, SeekOrigin.Begin);
+        foreach (uint position in regionPositions)
         {
-            stream.Seek(4, SeekOrigin.Current);
-            writer.Write(position);
+            _stream.Seek(4, SeekOrigin.Current);
+            _writer.Write(position);
         }
 
-        stream.Seek(endOffset, SeekOrigin.Begin);
+        _stream.Seek(endOffset, SeekOrigin.Begin);
     }
 
     private void WriteNode(Node node)
     {
-        writer.Write(staticStrings[node.Name]);
-        writer.Write((UInt32)node.Attributes.Count);
-        writer.Write((UInt32)node.ChildCount);
+        if (_writer is null) return;
+
+        _writer.Write(_staticStrings[node.Name]);
+        _writer.Write((uint)node.Attributes.Count);
+        _writer.Write((uint)node.ChildCount);
 
         foreach (var attribute in node.Attributes)
         {
-            writer.Write(staticStrings[attribute.Key]);
-            writer.Write((UInt32)attribute.Value.Type);
+            _writer.Write(_staticStrings[attribute.Key]);
+            _writer.Write((uint)attribute.Value.Type);
             WriteAttribute(attribute.Value);
         }
 
-        foreach (var children in node.Children)
+        foreach (var childList in node.Children.Values)
         {
-            foreach (var child in children.Value)
-                WriteNode(child);
+            if (childList is null) continue;
+            foreach (var child in childList)
+            {
+                if (child is not null) WriteNode(child);
+            }
         }
     }
 
+
     private void WriteAttribute(NodeAttribute attr)
     {
+        if (_writer is null) return;
+
         switch (attr.Type)
         {
             case AttributeType.String:
             case AttributeType.Path:
             case AttributeType.FixedString:
             case AttributeType.LSString:
-                WriteString((string)attr.Value, true);
+                WriteString((string)(attr.Value ?? string.Empty), true);
                 break;
 
             case AttributeType.WString:
             case AttributeType.LSWString:
-                WriteWideString((string)attr.Value, true);
+                WriteWideString((string)(attr.Value ?? string.Empty), true);
                 break;
 
             case AttributeType.TranslatedString:
                 {
-                    var str = (TranslatedString)attr.Value;
-                    if (Version >= 4 && str.Value == null)
+                    var str = (TranslatedString)(attr.Value ?? new TranslatedString());
+                    if (_version >= 4 && str.Value is null)
                     {
-                        writer.Write(str.Version);
+                        _writer.Write(str.Version);
                     }
                     else
                     {
-                        WriteString(str.Value ?? "", true);
+                        WriteString(str.Value ?? string.Empty, true);
                     }
 
                     WriteString(str.Handle, true);
@@ -124,22 +142,21 @@ public class LSBWriter(Stream stream)
 
             case AttributeType.ScratchBuffer:
                 {
-                    var buffer = (byte[])attr.Value;
-                    writer.Write((UInt32)buffer.Length);
-                    writer.Write(buffer);
+                    var buffer = (byte[])(attr.Value ?? Array.Empty<byte>());
+                    _writer.Write((uint)buffer.Length);
+                    _writer.Write(buffer);
                     break;
                 }
 
-            // DT_TranslatedFSString not supported in LSB
             default:
-                BinUtils.WriteAttribute(writer, attr);
+                BinUtils.WriteAttribute(_writer, attr);
                 break;
         }
     }
 
     private void CollectStaticStrings(Resource rsrc)
     {
-        staticStrings.Clear();
+        _staticStrings.Clear();
         foreach (var rgn in rsrc.Regions)
         {
             AddStaticString(rgn.Key);
@@ -156,48 +173,57 @@ public class LSBWriter(Stream stream)
             AddStaticString(attr.Key);
         }
 
-        foreach (var children in node.Children)
+        foreach (var childList in node.Children.Values)
         {
-            foreach (var child in children.Value)
-                CollectStaticStrings(child);
+            if (childList is null) continue;
+            foreach (var child in childList)
+            {
+                if (child is not null) CollectStaticStrings(child);
+            }
         }
     }
 
     private void AddStaticString(string s)
     {
-        if (!staticStrings.ContainsKey(s))
+        if (!_staticStrings.ContainsKey(s))
         {
-            staticStrings.Add(s, nextStaticStringId++);
+            _staticStrings.Add(s, _nextStaticStringId++);
         }
     }
 
     private void WriteStaticStrings()
     {
-        writer.Write((UInt32)staticStrings.Count);
-        foreach (var s in staticStrings)
+        if (_writer is null) return;
+
+        _writer.Write((uint)_staticStrings.Count);
+        foreach (var s in _staticStrings)
         {
             WriteString(s.Key, false);
-            writer.Write(s.Value);
+            _writer.Write(s.Value);
         }
     }
 
     private void WriteString(string s, bool nullTerminated)
     {
-        byte[] utf = System.Text.Encoding.UTF8.GetBytes(s);
+        if (_writer is null) return;
+
+        byte[] utf = Encoding.UTF8.GetBytes(s);
         int length = utf.Length + (nullTerminated ? 1 : 0);
-        writer.Write(length);
-        writer.Write(utf);
+        _writer.Write(length);
+        _writer.Write(utf);
         if (nullTerminated)
-            writer.Write((Byte)0);
+            _writer.Write((byte)0);
     }
 
     private void WriteWideString(string s, bool nullTerminated)
     {
-        byte[] unicode = System.Text.Encoding.Unicode.GetBytes(s);
+        if (_writer is null) return;
+
+        byte[] unicode = Encoding.Unicode.GetBytes(s);
         int length = (unicode.Length / 2) + (nullTerminated ? 1 : 0);
-        writer.Write(length);
-        writer.Write(unicode);
+        _writer.Write(length);
+        _writer.Write(unicode);
         if (nullTerminated)
-            writer.Write((UInt16)0);
+            _writer.Write((ushort)0);
     }
 }
