@@ -5,9 +5,10 @@ MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LSLib", "LSLib\LSLib.csproj", "{46372C50-4288-4B8E-AF21-C934560600E0}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ConverterApp", "ConverterApp\ConverterApp.csproj", "{FAD67294-6223-47E0-8838-E4E7FBC53ED2}"
-EndProject
+	ProjectSection(ProjectDependencies) = postProject
+		{D8B26B12-E45C-47EA-88F7-56628EB2CCD1} = {D8B26B12-E45C-47EA-88F7-56628EB2CCD1}
+	EndProjectSection
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Divine", "Divine\Divine.csproj", "{CBFEE38F-5F12-4D6F-B4FB-267FB68A6BEA}"
-EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "RconClient", "RconClient\RconClient.csproj", "{EF82C289-53D6-41C8-B5C3-72B37655C7F3}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "StoryCompiler", "StoryCompiler\StoryCompiler.csproj", "{32F08B9A-F50B-4C2E-AB56-533FED066DDE}"
@@ -22,7 +23,9 @@ EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "StatParser", "StatParser\StatParser.csproj", "{94D900D1-EC77-4170-8942-56E3736E44DE}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "VTexTool", "VTexTool\VTexTool.csproj", "{67E646C2-3C3C-4327-A0B4-40C1DB32579F}"
-EndProject
+	ProjectSection(ProjectDependencies) = postProject
+		{D8B26B12-E45C-47EA-88F7-56628EB2CCD1} = {D8B26B12-E45C-47EA-88F7-56628EB2CCD1}
+	EndProjectSection
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{6DF990BA-71FD-4DAE-9BAD-53B4B9097C13}"
 	ProjectSection(SolutionItems) = preProject
 		.editorconfig = .editorconfig
